@@ -86,7 +86,7 @@ public final class Ahoy {
             "Ahoy-Visit": currentVisit.visitToken
         ]
 
-        ahoyHeaders.forEach { request.addValue($1, forHTTPHeaderField: $0) }
+        ahoyHeaders.forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
         return configuration.urlRequestHandler(request)
     }
