@@ -12,7 +12,7 @@ struct ExpiringPersisted<T: Codable> {
     var wrappedValue: T {
         guard
             let data = defaults.value(forKey: key) as? Data,
-            case let container = try! jsonDecoder.decode(DatedStorageContainer<T>.self, from: data),
+            let container = try? jsonDecoder.decode(DatedStorageContainer<T>.self, from: data),
             case let now = Current.date(),
             (expiryPeriod.map(container.storageDate.advanced(by:)) ?? now) > now
         else {
