@@ -16,10 +16,15 @@ final class AhoyTests: XCTestCase {
 
     private var cancellables: Set<AnyCancellable> = []
 
-    func testTrackVisit() {
+    override func setUp() {
+        super.setUp()
+
+        TestDefaults.instance.reset()
         Current.defaults = TestDefaults.instance
         Current.visitorToken = { UUID(uuidString: "EB4DCB73-2B32-52CD-A2CF-AD7948674B22")! }
+    }
 
+    func testTrackVisit() {
         Current.date = { .init(timeIntervalSince1970: 0) }
         Current.uuid = { UUID(uuidString: "B054681C-100B-46FE-94A0-7AACA78116CB")! }
 
@@ -31,7 +36,7 @@ final class AhoyTests: XCTestCase {
             "Content-Type": " application/json; charset=utf-8"
         ]
 
-        let expectedRequestBody: String = "{\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"app_version\":\"9.9.99\",\"visit_token\":\"B054681C-100B-46FE-94A0-7AACA78116CB\",\"os_version\":\"16.0.2\",\"platform\":\"iOS\"}"
+        var expectedRequestBody: String = "{\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"app_version\":\"9.9.99\",\"visit_token\":\"B054681C-100B-46FE-94A0-7AACA78116CB\",\"os_version\":\"16.0.2\",\"platform\":\"iOS\"}"
 
         let expectation1 = self.expectation(description: "1")
 
@@ -52,12 +57,15 @@ final class AhoyTests: XCTestCase {
         Current.date = { Date(timeIntervalSince1970: 0).advanced(by: configuration.visitDuration! - 1) }
         Current.uuid = { UUID(uuidString: "4D02659F-6030-4C9A-B63F-9E322127C42B")! }
 
+        expectedRequestBody = "{\"source\":3,\"app_version\":\"9.9.99\",\"utm_source\":\"some-place\",\"platform\":\"iOS\",\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"os_version\":\"16.0.2\",\"visit_token\":\"B054681C-100B-46FE-94A0-7AACA78116CB\"}"
+
         let expectation2 = self.expectation(description: "2")
 
-        ahoy.trackVisit()
+        ahoy.trackVisit(additionalParams: ["utm_source": "some-place", "source": 3])
             .sink(
                 receiveCompletion: { if case .failure = $0 { XCTFail() } },
                 receiveValue: {
+                    XCTAssertEqual(TestRequestHandler.instance.body, expectedRequestBody)
                     XCTAssertEqual(TestRequestHandler.instance.headers, testHeaders)
                     expectation2.fulfill()
                 }
@@ -95,6 +103,8 @@ final class AhoyTests: XCTestCase {
 
     func testTrackEvents() {
         let expectedRequestBody: String = "{\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"events\":[{\"name\":\"test\",\"properties\":{\"123\":456},\"time\":\"1970-01-01T00:00:00Z\"}],\"visit_token\":\"98C44594-050F-4DEF-80AF-AB723472469B\"}"
+
+        Current.uuid = { UUID(uuidString: "98C44594-050F-4DEF-80AF-AB723472469B")! }
 
         let events: [Event] = [
             .init(name: "test", properties: ["123": 456], time: .init(timeIntervalSince1970: 0))
@@ -176,5 +186,9 @@ final class TestDefaults: UserDefaults {
 
     override func value(forKey key: String) -> Any? {
         storage[key]
+    }
+
+    func reset() {
+        storage = [:]
     }
 }

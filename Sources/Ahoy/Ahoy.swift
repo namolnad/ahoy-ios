@@ -33,7 +33,7 @@ public final class Ahoy {
         self.storage = storage ?? TokenManager()
     }
 
-    public func trackVisit() -> AnyPublisher<Void, Error> {
+    public func trackVisit(additionalParams: [String: Encodable]? = nil) -> AnyPublisher<Void, Error> {
         currentVisit = .init(
             visitorToken: storage.visitorToken,
             visitToken: storage.visitToken
@@ -44,7 +44,8 @@ public final class Ahoy {
             visitToken: currentVisit.visitToken,
             platform: configuration.platform,
             appVersion: configuration.appVersion,
-            osVersion: configuration.osVersion
+            osVersion: configuration.osVersion,
+            additionalParams: additionalParams
         )
 
         return dataTaskPublisher(path: configuration.visitsPath, body: requestInput)
@@ -93,10 +94,71 @@ public final class Ahoy {
     }
 
     private struct VisitRequestInput: Encodable {
+        private enum CodingKeys: CodingKey {
+            case visitorToken
+            case visitToken
+            case platform
+            case appVersion
+            case osVersion
+            case custom(String)
+
+            var stringValue: String {
+                switch self {
+                case .appVersion:
+                    return "appVersion"
+                case .osVersion:
+                    return "osVersion"
+                case .platform:
+                    return "platform"
+                case .visitToken:
+                    return "visitToken"
+                case .visitorToken:
+                    return "visitorToken"
+                case let .custom(value):
+                    return value
+                }
+            }
+
+            init?(stringValue: String) {
+                switch stringValue {
+                case "appVersion":
+                    self = .appVersion
+                case "osVersion":
+                    self = .osVersion
+                case "platform":
+                    self = .platform
+                case "visitToken":
+                    self = .visitToken
+                case "visitorToken":
+                    self = .visitorToken
+                default:
+                    self = .custom(stringValue)
+                }
+            }
+
+            var intValue: Int? { nil }
+
+            init?(intValue: Int) { nil }
+        }
+
         var visitorToken: String
         var visitToken: String
         var platform: String
         var appVersion: String
         var osVersion: String
+        var additionalParams: [String: Encodable]?
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(visitorToken, forKey: .visitorToken)
+            try container.encode(visitToken, forKey: .visitToken)
+            try container.encode(platform, forKey: .platform)
+            try container.encode(appVersion, forKey: .appVersion)
+            try container.encode(osVersion, forKey: .osVersion)
+            try additionalParams?.sorted(by: { $0.0 < $1.0 }).forEach { key, value in
+                let wrapper = AnyEncodable(wrapped: value)
+                try container.encode(wrapper, forKey: .custom(key))
+            }
+        }
     }
 }
