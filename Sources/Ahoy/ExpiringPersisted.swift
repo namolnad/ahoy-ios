@@ -12,11 +12,12 @@ struct ExpiringPersisted<T: Codable> {
     var wrappedValue: T {
         guard
             let data = defaults.value(forKey: key) as? Data,
-            case let container = try! jsonDecoder.decode(ExpiringContainer<T>.self, from: data),
-            !container.expired
+            case let container = try! jsonDecoder.decode(DatedStorageContainer<T>.self, from: data),
+            case let now = Current.date(),
+            (expiryPeriod.map(container.storageDate.advanced(by:)) ?? now) > now
         else {
-            let container: ExpiringContainer = .init(
-                expiry: expiryPeriod.map(Current.date().addingTimeInterval),
+            let container: DatedStorageContainer = .init(
+                storageDate: Current.date(),
                 value: newValue()
             )
             defaults.set(try! jsonEncoder.encode(container), forKey: key)
@@ -26,15 +27,8 @@ struct ExpiringPersisted<T: Codable> {
         return container.value
     }
 
-    private struct ExpiringContainer<T: Codable>: Codable {
-        let expiry: Date?
+    private struct DatedStorageContainer<T: Codable>: Codable {
+        let storageDate: Date
         let value: T
-
-        var expired: Bool {
-            guard let expiry = expiry else {
-                return false
-            }
-            return Current.date() > expiry
-        }
     }
 }
