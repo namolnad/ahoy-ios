@@ -77,13 +77,16 @@ public final class Ahoy {
         )
         request.httpBody = try? Self.jsonEncoder.encode(body)
         request.httpMethod = "POST"
-        request.allHTTPHeaderFields = [
+
+        requestInterceptors.forEach { $0.interceptRequest(&request) }
+
+        let ahoyHeaders: [String: String] = [
             "Content-Type": " application/json; charset=utf-8",
             "Ahoy-Visitor": currentVisit.visitorToken,
             "Ahoy-Visit": currentVisit.visitToken
         ]
 
-        requestInterceptors.forEach { $0.interceptRequest(&request) }
+        ahoyHeaders.forEach { request.addValue($1, forHTTPHeaderField: $0) }
 
         return configuration.urlRequestHandler(request)
     }
