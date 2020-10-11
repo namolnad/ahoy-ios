@@ -36,7 +36,8 @@ public final class Ahoy {
     public func trackVisit(additionalParams: [String: Encodable]? = nil) -> AnyPublisher<Void, Error> {
         currentVisit = .init(
             visitorToken: storage.visitorToken,
-            visitToken: storage.visitToken
+            visitToken: storage.visitToken,
+            additionalParams: additionalParams
         )
 
         let requestInput: VisitRequestInput = .init(
