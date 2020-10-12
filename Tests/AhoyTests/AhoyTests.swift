@@ -1,7 +1,11 @@
 import Combine
+#if !os(watchOS)
 import XCTest
+#endif
 @testable import Ahoy
 
+#if !os(watchOS)
+@available(iOS 13, tvOS 13, macOS 10.15, *)
 final class AhoyTests: XCTestCase {
     private static let jsonDecoder: JSONDecoder = {
         let decoder: JSONDecoder = .init()
@@ -192,3 +196,4 @@ final class TestDefaults: UserDefaults {
         storage = [:]
     }
 }
+#endif
