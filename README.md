@@ -16,14 +16,18 @@ The Ahoy library can be easily installed using Swift Package Manager. See the [A
 
 ## Usage
 
-To get started you need to initialize an instance of an Ahoy client. The initializer takes a configuration object, which requires you to provide a `baseUrl` (your server location) as well as an `ApplicationEnvironment` object.
+To get started you need to initialize an instance of an Ahoy client. The initializer takes a configuration object, which requires you to provide a `baseUrl` as well as an `ApplicationEnvironment` object.
 ``` swift
 import Ahoy
 
 let ahoy: Ahoy = .init(
     configuration: .init(
-    environment: .init(),
-    baseUrl: URL(string: "https://your-sever.com")!
+    environment: .init(
+        platform: UIDevice.current.systemName,
+        appVersion: "1.0.2",
+        osVersion: UIDevice.current.systemVersion
+    ),
+    baseUrl: URL(string: "https://your-server.com")!
 )
 ```
 ### Configuration
