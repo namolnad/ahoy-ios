@@ -31,18 +31,18 @@ let ahoy: Ahoy = .init(
 )
 ```
 ### Configuration
-The configuation object has intelligent defaults (listed below in parens), but allows you to a to provide overrides for a series of values:
-- visitDuration (30 minutes)
-- urlRequestHandler (URLSession.shared.dataTaskPublisher)
+The configuation object has intelligent defaults _(listed below in parens)_, but allows you to a to provide overrides for a series of values:
+- visitDuration _(30 minutes)_
+- urlRequestHandler _(`URLSession.shared.dataTaskPublisher`)_
 - Routing
-    - ahoyPath ("ahoy")
-    - visitsPath ("visits")
-    - eventsPath ("events")
+    - ahoyPath _("ahoy")_
+    - visitsPath _("visits")_
+    - eventsPath _("events")_
 
-Beyond configuration, you can also provide your own `AhoyTokenManager` and `RequestInterceptor`s (can be modified later) for custom token management and pre-flight Ahoy request modifications, respectively.
+Beyond configuration, you can also provide your own `AhoyTokenManager` and `RequestInterceptor`s at initialization _(`requestInterceptors` can be modified later)_ for custom token management and pre-flight Ahoy request modifications, respectively.
 
 ### Tracking a visit
-After your client is initialized (ensure you maintain a reference), you'll need to track a visit, typically done at application launch. If desired, you can pass custom data such as utm parameters, referrer, etc.
+After your client is initialized — ensure you maintain a reference — you'll need to track a visit, typically done at application launch. If desired, you can pass custom data such as utm parameters, referrer, etc.
 
 ``` swift
 ahoy.trackVisit()
@@ -59,4 +59,4 @@ ahoy.track(events: [myFirstEvent, mySecondEvent])
 ```
 
 ### Other goodies
-To access the current visit directly, simply use your Ahoy client's `currentVisit` property. (there is also a publisher you can listen to). Additionally, you can use your the `headers` property to add `Ahoy-Visitor` and `Ahoy-Visit` tokens to your own requests as needed.
+To access the current visit directly, simply use your Ahoy client's `currentVisit` property. _(There is also a currentVisitPublisher you can listen to.)_ Additionally, you can use the `headers` property to add `Ahoy-Visitor` and `Ahoy-Visit` tokens to your own requests as needed.
