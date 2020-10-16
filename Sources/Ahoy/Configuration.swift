@@ -7,9 +7,9 @@ public struct Configuration {
     public typealias URLRequestHandler = (URLRequest) -> URLRequestPublisher
 
     public struct ApplicationEnvironment {
-        var platform: String
-        var appVersion: String
-        var osVersion: String
+        let platform: String
+        let appVersion: String
+        let osVersion: String
 
         public init(platform: String, appVersion: String, osVersion: String) {
             self.platform = platform
@@ -18,13 +18,13 @@ public struct Configuration {
         }
     }
 
-    var environment: ApplicationEnvironment
-    var urlRequestHandler: URLRequestHandler
-    var baseUrl: URL
-    var ahoyPath: String
-    var eventsPath: String
-    var visitsPath: String
-    var visitDuration: TimeInterval?
+    let environment: ApplicationEnvironment
+    let urlRequestHandler: URLRequestHandler
+    let baseUrl: URL
+    let ahoyPath: String
+    let eventsPath: String
+    let visitsPath: String
+    let visitDuration: TimeInterval?
 
     public init(
         environment: ApplicationEnvironment,

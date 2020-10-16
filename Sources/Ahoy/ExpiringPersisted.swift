@@ -4,10 +4,10 @@ import Foundation
 struct ExpiringPersisted<T: Codable> {
     let key: String
     let newValue: () -> T
-    var expiryPeriod: TimeInterval? = nil
-    var defaults: UserDefaults = Current.defaults
-    var jsonEncoder: JSONEncoder
-    var jsonDecoder: JSONDecoder
+    private(set) var expiryPeriod: TimeInterval? = nil
+    private(set) var defaults: UserDefaults = Current.defaults
+    let jsonEncoder: JSONEncoder
+    let jsonDecoder: JSONDecoder
 
     var wrappedValue: T {
         guard

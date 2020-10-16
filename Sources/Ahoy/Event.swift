@@ -8,10 +8,10 @@ public struct Event: Encodable {
         case time
     }
 
-    var id: String?
-    var name: String
-    var properties: [String: Encodable]
-    var time: Date
+    let id: String?
+    let name: String
+    let properties: [String: Encodable]
+    let time: Date
 
     public init(
         id: String? = nil,
