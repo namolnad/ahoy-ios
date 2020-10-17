@@ -46,7 +46,7 @@ After your client is initialized — ensure you maintain a reference — you'll 
 
 ``` swift
 ahoy.trackVisit()
-    .sink(recieveCompletion: { _ in }, receiveOutput: { visit in  print(visit) })
+    .sink(receiveCompletion: { _ in }, receiveOutput: { visit in  print(visit) })
     .store(in: &cancellables)
 ```
 
@@ -54,7 +54,7 @@ ahoy.trackVisit()
 After your client has successfully registered a visit, you can send begin to send events to your server.
 ``` swift
 ahoy.track(events: [myFirstEvent, mySecondEvent])
-    .sink(recieveCompletion: { _ in }, receiveOutput: { _ in })
+    .sink(receiveCompletion: { _ in }, receiveOutput: { _ in })
     .store(in: &cancellables)
 ```
 
