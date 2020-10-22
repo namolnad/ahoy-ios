@@ -75,7 +75,7 @@ public final class Ahoy {
                     visit.visitorToken == visitResponse.visitorToken,
                     visit.visitToken == visitResponse.visitToken
                 else {
-                    throw AhoyError.mismatchingSession
+                    throw AhoyError.mismatchingVisit
                 }
                 // Pass back the visit created by the client (which has custom variables)
                 return visit
@@ -88,7 +88,7 @@ public final class Ahoy {
 
     public func track(events: [Event]) -> AnyPublisher<Void, Error> {
         guard let currentVisit = currentVisit else {
-            return Fail(error: AhoyError.noSession)
+            return Fail(error: AhoyError.noVisit)
                 .eraseToAnyPublisher()
         }
 
