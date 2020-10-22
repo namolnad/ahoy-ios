@@ -33,6 +33,8 @@ public final class Ahoy {
 
     private let storage: AhoyTokenManager
 
+    private var cancellables: Set<AnyCancellable> = []
+
     public init(
         configuration: Configuration,
         requestInterceptors: [RequestInterceptor] = [],
@@ -46,6 +48,8 @@ public final class Ahoy {
         self.storage = storage ?? TokenManager()
     }
 
+    /// Tracks a visit. A visit *must* be tracked prior to tracking events so a `visitToken` can be associated with the event.
+    /// Can be called multiple times during a session—a new visit will be created as determined by your `TokenManager`.
     public func trackVisit(additionalParams: [String: Encodable]? = nil) -> AnyPublisher<Visit, Error> {
         let visit: Visit = .init(
             visitorToken: storage.visitorToken,
@@ -86,6 +90,7 @@ public final class Ahoy {
             .eraseToAnyPublisher()
     }
 
+    /// Bulk-tracking events
     public func track(events: [Event]) -> AnyPublisher<Void, Error> {
         guard let currentVisit = currentVisit else {
             return Fail(error: AhoyError.noVisit)
@@ -107,6 +112,14 @@ public final class Ahoy {
             .map { _, _ in }
             .mapError { $0 }
             .eraseToAnyPublisher()
+    }
+
+    /// A fire-and-forget convenience function for `track(events:)`
+    public func track(_ events: Event...) {
+        track(events: events)
+            .retry(3)
+            .sink(receiveCompletion: { _ in }, receiveValue: {})
+            .store(in: &cancellables)
     }
 
     private func dataTaskPublisher<Body: Encodable>(path: String, body: Body, visit: Visit) -> Configuration.URLRequestPublisher {
