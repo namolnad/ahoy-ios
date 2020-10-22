@@ -33,3 +33,9 @@ public struct Event: Encodable {
         try container.encode(time, forKey: .time)
     }
 }
+
+extension Event: ExpressibleByStringLiteral {
+    public init(stringLiteral value: String) {
+        self.init(name: value, properties: [:])
+    }
+}
