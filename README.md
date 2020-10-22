@@ -51,11 +51,25 @@ ahoy.trackVisit()
 ```
 
 ### Tracking events
-After your client has successfully registered a visit, you can send begin to send events to your server.
+After your client has successfully registered a visit, you can begin to send events to your server.
 ``` swift
-ahoy.track(events: [myFirstEvent, mySecondEvent])
-    .sink(receiveCompletion: { _ in }, receiveOutput: { _ in })
+/// For bulk-tracking, use the `track(events:)` function
+var pendingEvents: [Event] = []
+pendingEvents.append(Event(name: "ride_details.update_driver_rating", properties: ["driver_id": 4]))
+pendingEvents.append(Event(name: "ride_details.increase_tip", properties: ["driver_id": 4]))
+
+ahoy.track(events: pendingEvents)
+    .sink(
+        receiveCompletion: { _ in }, // handle error as needed
+        receiveValue: { pendingEvents.removeAll() }
+    )
     .store(in: &cancellables)
+
+/// If you prefer to fire events individually, you can use the fire-and-forget convenience method
+ahoy.track("ride_details.update_driver_rating", properties: ["driver_id": 4])
+
+/// If your event does not require properties, they can be omitted
+ahoy.track("ride_details.update_driver_rating")
 ```
 
 ### Other goodies
