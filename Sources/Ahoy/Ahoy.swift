@@ -114,9 +114,9 @@ public final class Ahoy {
             .eraseToAnyPublisher()
     }
 
-    /// A fire-and-forget convenience function for `track(events:)`
-    public func track(_ events: Event...) {
-        track(events: events)
+    /// A fire-and-forget convenience function for tracking a single event
+    public func track(_ eventName: String, properties: [String: Encodable] = [:]) {
+        track(events: [.init(name: eventName, properties: properties)])
             .retry(3)
             .sink(receiveCompletion: { _ in }, receiveValue: {})
             .store(in: &cancellables)
