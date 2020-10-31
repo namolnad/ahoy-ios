@@ -46,7 +46,7 @@ After your client is initialized — ensure you maintain a reference — you'll 
 
 ``` swift
 ahoy.trackVisit()
-    .sink(receiveCompletion: { _ in }, receiveOutput: { visit in  print(visit) })
+    .sink(receiveCompletion: { _ in }, receiveOutput: { visit in print(visit) })
     .store(in: &cancellables)
 ```
 
