@@ -24,7 +24,7 @@ public final class Ahoy {
             .eraseToAnyPublisher()
     }
 
-    /// Hooks for your application to modifiy the Ahoy requests prior to performing the request
+    /// Hooks for your application to modify the Ahoy requests prior to performing the request
     public var requestInterceptors: [RequestInterceptor]
 
     private let currentVisitSubject: CurrentValueSubject<Visit?, Error> = .init(nil)
