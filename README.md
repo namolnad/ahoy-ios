@@ -22,12 +22,13 @@ import Ahoy
 
 let ahoy: Ahoy = .init(
     configuration: .init(
-    environment: .init(
-        platform: UIDevice.current.systemName,
-        appVersion: "1.0.2",
-        osVersion: UIDevice.current.systemVersion
-    ),
-    baseUrl: URL(string: "https://your-server.com")!
+        environment: .init(
+            platform: UIDevice.current.systemName,
+            appVersion: "1.0.2",
+            osVersion: UIDevice.current.systemVersion
+        ),
+        baseUrl: URL(string: "https://your-server.com")!
+    )
 )
 ```
 ### Configuration
