@@ -28,6 +28,7 @@ let ahoy: Ahoy = .init(
         osVersion: UIDevice.current.systemVersion
     ),
     baseUrl: URL(string: "https://your-server.com")!
+  )
 )
 ```
 ### Configuration
