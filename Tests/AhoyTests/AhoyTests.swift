@@ -148,6 +148,42 @@ final class AhoyTests: XCTestCase {
         wait(for: [expectation], timeout: 0.1)
     }
 
+    func testTrackEventsWithAuthenticatedUser() {
+        let expectedRequestBody: String = "{\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"events\":[{\"properties\":{\"123\":456},\"user_id\":\"12345\",\"name\":\"test\",\"time\":\"1970-01-01T00:00:00Z\"}],\"visit_token\":\"98C44594-050F-4DEF-80AF-AB723472469B\"}"
+
+        Current.uuid = { UUID(uuidString: "98C44594-050F-4DEF-80AF-AB723472469B")! }
+
+        let visitExpectation = self.expectation(description: "visit")
+
+        ahoy.trackVisit()
+            .sink(receiveCompletion: { _ in }, receiveValue: { _ in
+                visitExpectation.fulfill()
+            })
+            .store(in: &cancellables)
+
+        wait(for: [visitExpectation], timeout: 0.1)
+
+        ahoy.authenticate(userId: "12345")
+
+        let events: [Event] = [
+            .init(name: "test", properties: ["123": 456], time: .init(timeIntervalSince1970: 0))
+        ]
+
+        let expectation = self.expectation(description: "track_events")
+
+        ahoy.track(events: events)
+            .sink(
+                receiveCompletion: { if case .failure = $0 { XCTFail() } },
+                receiveValue: {
+                    XCTAssertEqual(TestRequestHandler.instance.body, expectedRequestBody)
+                    expectation.fulfill()
+                }
+            )
+            .store(in: &cancellables)
+
+        wait(for: [expectation], timeout: 0.1)
+    }
+
     static var allTests = [
         ("testTrackVisit", testTrackVisit),
         ("testTrackEvents", testTrackEvents)

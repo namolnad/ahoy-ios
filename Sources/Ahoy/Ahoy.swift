@@ -24,7 +24,7 @@ public final class Ahoy {
             .eraseToAnyPublisher()
     }
 
-    /// Hooks for your application to modifiy the Ahoy requests prior to performing the request
+    /// Hooks for your application to modify the Ahoy requests prior to performing the request
     public var requestInterceptors: [RequestInterceptor]
 
     private let currentVisitSubject: CurrentValueSubject<Visit?, Error> = .init(nil)
@@ -100,7 +100,7 @@ public final class Ahoy {
         let requestInput: EventRequestInput = .init(
             visitorToken: currentVisit.visitorToken,
             visitToken: currentVisit.visitToken,
-            events: events
+            events: events.map { .init(userId: currentVisit.userId, wrapped: $0) }
         )
 
         return dataTaskPublisher(
@@ -120,6 +120,12 @@ public final class Ahoy {
             .retry(3)
             .sink(receiveCompletion: { _ in }, receiveValue: {})
             .store(in: &cancellables)
+    }
+
+    public func authenticate(userId: String) {
+        var currentVisit = currentVisitSubject.value
+        currentVisit?.userId = userId
+        currentVisitSubject.send(currentVisit)
     }
 
     private func dataTaskPublisher<Body: Encodable>(path: String, body: Body, visit: Visit) -> Configuration.URLRequestPublisher {
@@ -161,7 +167,7 @@ public final class Ahoy {
     private struct EventRequestInput: Encodable {
         var visitorToken: String
         var visitToken: String
-        var events: [Event]
+        var events: [UserIdDecorated<Event>]
     }
 
     private struct VisitRequestInput: Encodable {
@@ -230,6 +236,21 @@ public final class Ahoy {
                 let wrapper = AnyEncodable(wrapped: value)
                 try container.encode(wrapper, forKey: .custom(key))
             }
+        }
+    }
+
+    private struct UserIdDecorated<Wrapped: Encodable>: Encodable {
+        enum CodingKeys: CodingKey {
+            case userId
+        }
+
+        let userId: String?
+        let wrapped: Wrapped
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(userId, forKey: .userId)
+            try wrapped.encode(to: encoder)
         }
     }
 }
