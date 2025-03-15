@@ -148,7 +148,7 @@ final class AhoyTests: XCTestCase {
         wait(for: [expectation], timeout: 0.1)
     }
 
-    func testTrackEventsWithAuthenticatedUser() {
+    func testTrackEventsWithAttachedUser() {
         let expectedRequestBody: String = "{\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"events\":[{\"properties\":{\"123\":456},\"user_id\":\"12345\",\"name\":\"test\",\"time\":\"1970-01-01T00:00:00Z\"}],\"visit_token\":\"98C44594-050F-4DEF-80AF-AB723472469B\"}"
 
         Current.uuid = { UUID(uuidString: "98C44594-050F-4DEF-80AF-AB723472469B")! }
@@ -163,7 +163,7 @@ final class AhoyTests: XCTestCase {
 
         wait(for: [visitExpectation], timeout: 0.1)
 
-        ahoy.authenticate(userId: "12345")
+        ahoy.attach(userId: "12345")
 
         let events: [Event] = [
             .init(name: "test", properties: ["123": 456], time: .init(timeIntervalSince1970: 0))

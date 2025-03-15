@@ -122,7 +122,9 @@ public final class Ahoy {
             .store(in: &cancellables)
     }
 
-    public func authenticate(userId: String) {
+    /// Attaches a User's ID to be encoded as a root key within subsequent event JSON payloads. NOTE: This does not authenticate the user on your server and is only useful for specially-handled cases.
+    /// Example event payload `{"properties":{"123":456},"user_id":"12345","name":"test","time":"1970-01-01T00:00:00Z"}`
+    public func attach(userId: String) {
         var currentVisit = currentVisitSubject.value
         currentVisit?.userId = userId
         currentVisitSubject.send(currentVisit)
