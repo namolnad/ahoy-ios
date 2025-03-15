@@ -156,6 +156,7 @@ public final class Ahoy {
         let encoder: JSONEncoder = .init()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
 

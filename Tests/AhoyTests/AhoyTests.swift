@@ -7,13 +7,6 @@ import XCTest
 #if !os(watchOS)
 @available(iOS 13, tvOS 13, macOS 10.15, *)
 final class AhoyTests: XCTestCase {
-    private static let jsonDecoder: JSONDecoder = {
-        let decoder: JSONDecoder = .init()
-        decoder.dateDecodingStrategy = .iso8601
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return decoder
-    }()
-
     private var ahoy: Ahoy!
 
     private let configuration: Configuration = .testDefault
@@ -43,7 +36,7 @@ final class AhoyTests: XCTestCase {
             "Content-Type": " application/json; charset=utf-8"
         ]
 
-        var expectedRequestBody: String = "{\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"app_version\":\"9.9.99\",\"visit_token\":\"B054681C-100B-46FE-94A0-7AACA78116CB\",\"os_version\":\"16.0.2\",\"platform\":\"iOS\"}"
+        var expectedRequestBody: String = "{\"app_version\":\"9.9.99\",\"os_version\":\"16.0.2\",\"platform\":\"iOS\",\"visit_token\":\"B054681C-100B-46FE-94A0-7AACA78116CB\",\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\"}"
 
         let expectation1 = self.expectation(description: "1")
 
@@ -66,7 +59,7 @@ final class AhoyTests: XCTestCase {
         Current.date = { Date(timeIntervalSince1970: 0).advanced(by: configuration.visitDuration! - 1) }
         Current.uuid = { UUID(uuidString: "4D02659F-6030-4C9A-B63F-9E322127C42B")! }
 
-        expectedRequestBody = "{\"source\":3,\"app_version\":\"9.9.99\",\"utm_source\":\"some-place\",\"platform\":\"iOS\",\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"os_version\":\"16.0.2\",\"visit_token\":\"B054681C-100B-46FE-94A0-7AACA78116CB\"}"
+        expectedRequestBody = "{\"app_version\":\"9.9.99\",\"os_version\":\"16.0.2\",\"platform\":\"iOS\",\"source\":3,\"utm_source\":\"some-place\",\"visit_token\":\"B054681C-100B-46FE-94A0-7AACA78116CB\",\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\"}"
 
         let expectation2 = self.expectation(description: "2")
 
@@ -115,7 +108,7 @@ final class AhoyTests: XCTestCase {
     }
 
     func testTrackEvents() {
-        let expectedRequestBody: String = "{\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"events\":[{\"name\":\"test\",\"properties\":{\"123\":456},\"time\":\"1970-01-01T00:00:00Z\"}],\"visit_token\":\"98C44594-050F-4DEF-80AF-AB723472469B\"}"
+        let expectedRequestBody: String = "{\"events\":[{\"name\":\"test\",\"properties\":{\"123\":456},\"time\":\"1970-01-01T00:00:00Z\"}],\"visit_token\":\"98C44594-050F-4DEF-80AF-AB723472469B\",\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\"}"
 
         Current.uuid = { UUID(uuidString: "98C44594-050F-4DEF-80AF-AB723472469B")! }
 
@@ -149,7 +142,7 @@ final class AhoyTests: XCTestCase {
     }
 
     func testTrackEventsWithAttachedUser() {
-        let expectedRequestBody: String = "{\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\",\"events\":[{\"properties\":{\"123\":456},\"user_id\":\"12345\",\"name\":\"test\",\"time\":\"1970-01-01T00:00:00Z\"}],\"visit_token\":\"98C44594-050F-4DEF-80AF-AB723472469B\"}"
+        let expectedRequestBody: String = "{\"events\":[{\"name\":\"test\",\"properties\":{\"123\":456},\"time\":\"1970-01-01T00:00:00Z\",\"user_id\":\"12345\"}],\"visit_token\":\"98C44594-050F-4DEF-80AF-AB723472469B\",\"visitor_token\":\"EB4DCB73-2B32-52CD-A2CF-AD7948674B22\"}"
 
         Current.uuid = { UUID(uuidString: "98C44594-050F-4DEF-80AF-AB723472469B")! }
 
