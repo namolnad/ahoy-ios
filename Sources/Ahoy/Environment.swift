@@ -5,6 +5,8 @@ struct Environment {
     var uuid: () -> UUID = UUID.init
     var visitorToken: () -> UUID = visitorTokenProvider
     var defaults: UserDefaults = .standard
+    var didBecomeActiveNotification: Notification.Name? = ApplicationLifecycle.didBecomeActiveNotification
+    var notificationCenter: NotificationCenter = .default
 }
 
 #if DEBUG

@@ -33,7 +33,9 @@ let ahoy: Ahoy = .init(
 ```
 ### Configuration
 The configuation object has intelligent defaults _(listed below in parens)_, but allows you to a to provide overrides for a series of values:
-- visitDuration _(30 minutes)_
+- visitDuration _(4 hours)_
+- automaticVisitRenewal _(true)_
+- visitParams _(none)_
 - urlRequestHandler _(`URLSession.shared.dataTaskPublisher`)_
 - Routing
     - ahoyPath _("ahoy")_
@@ -42,17 +44,45 @@ The configuation object has intelligent defaults _(listed below in parens)_, but
 
 Beyond configuration, you can also provide your own `AhoyTokenManager` and `RequestInterceptor`s at initialization _(`requestInterceptors` can be modified later)_ for custom token management and pre-flight Ahoy request modifications, respectively.
 
-### Tracking a visit
-After your client is initialized — ensure you maintain a reference — you'll need to track a visit, typically done at application launch. If desired, you can pass custom data such as utm parameters, referrer, etc.
+### Visits
+A visit is valid for `visitDuration`, measured from the moment it is created — the same fixed window used by [ahoy.js](https://github.com/ankane/ahoy.js) and the `Ahoy.visit_duration` setting in the Ahoy gem. You do not need to track time between events yourself.
+
+By default Ahoy keeps the visit current for you. It registers a new visit whenever the previous one has lapsed, at the two moments the web library would:
+
+- when your application becomes active _(the analogue of a web page load)_
+- lazily, when you track an event
+
+So for most applications, tracking events is all you need to do — a visit will be created on demand:
 
 ``` swift
-ahoy.trackVisit()
+ahoy.track("ride_details.update_driver_rating", properties: ["driver_id": 4])
+```
+
+If your visits carry attribution data such as utm parameters or a referrer, supply it via `visitParams` so the visits Ahoy creates on your behalf include it:
+
+``` swift
+let ahoy: Ahoy = .init(
+    configuration: .init(
+        environment: .init(/* ... */),
+        baseUrl: URL(string: "https://your-server.com")!,
+        visitParams: { ["utm_source": deepLink.utmSource] }
+    )
+)
+```
+
+### Tracking a visit manually
+To track a visit yourself — at application launch, or to attach params to one specific visit — call `trackVisit`. Calling it while a visit is still current re-registers the same visit token, which your Ahoy server ignores.
+
+``` swift
+ahoy.trackVisit(additionalParams: ["utm_source": "some-place"])
     .sink(receiveCompletion: { _ in }, receiveOutput: { visit in print(visit) })
     .store(in: &cancellables)
 ```
 
+To take over visit management entirely, set `automaticVisitRenewal` to `false`. Ahoy will then never create a visit on its own, and `track(events:)` fails with `AhoyError.noVisit` until you have registered one. `ensureCurrentVisit()` is available if you want the renew-if-expired behavior at a moment of your choosing.
+
 ### Tracking events
-After your client has successfully registered a visit, you can begin to send events to your server.
+Events are sent against the current visit, renewing it first when necessary.
 ``` swift
 /// For bulk-tracking, use the `track(events:)` function
 var pendingEvents: [Event] = []
@@ -71,6 +101,13 @@ ahoy.track("ride_details.update_driver_rating", properties: ["driver_id": 4])
 
 /// If your event does not require properties, they can be omitted
 ahoy.track("ride_details.update_driver_rating")
+```
+
+### Attaching a user
+`attach(userId:)` adds a `user_id` root key to subsequent event payloads. The attachment persists across visit renewals until you call `detachUser()`. _(Note: this does not authenticate the user on your server.)_
+
+``` swift
+ahoy.attach(userId: "12345")
 ```
 
 ### Other goodies
