@@ -407,6 +407,38 @@ final class AhoyTests: XCTestCase {
         XCTAssertFalse(manager.hasValidVisitToken)
     }
 
+    // MARK: - Fire-and-forget bookkeeping
+
+    /// The test handler completes synchronously, so each subscription settles before it can even be retained
+    func testFireAndForgetTrackingReleasesSynchronousRequests() {
+        Current.uuid = { .firstToken }
+
+        for index in 0..<50 {
+            ahoy.track("event_\(index)")
+        }
+
+        XCTAssertEqual(ahoy.inFlightEventCount, 0)
+        XCTAssertEqual(ahoy.settledEventCount, 0, "Bookkeeping must drain rather than trade one leak for another")
+        XCTAssertTrue(TestRequestHandler.instance.body.contains("event_49"))
+    }
+
+    func testFireAndForgetTrackingReleasesDeferredRequests() {
+        Current.uuid = { .firstToken }
+        DeferredEventsRequestHandler.instance.reset()
+
+        let ahoy: Ahoy = .init(configuration: .deferredEventsTestDefault)
+
+        ahoy.track("deferred_one")
+        ahoy.track("deferred_two")
+
+        XCTAssertEqual(ahoy.inFlightEventCount, 2, "Both requests are still in flight")
+
+        DeferredEventsRequestHandler.instance.completePending()
+
+        XCTAssertEqual(ahoy.inFlightEventCount, 0)
+        XCTAssertEqual(ahoy.settledEventCount, 0)
+    }
+
     // MARK: - Concurrency
 
     /// Needs only to compile: the public surface has to be shareable for the client to be usable at all
@@ -479,6 +511,60 @@ final class AhoyTests: XCTestCase {
 
 }
 
+/// Completes visit requests immediately but holds event requests open, so a test can observe a
+/// fire-and-forget subscription while it is genuinely in flight
+final class DeferredEventsRequestHandler: @unchecked Sendable {
+    nonisolated(unsafe) static let instance: DeferredEventsRequestHandler = .init()
+
+    private typealias Output = Configuration.URLRequestPublisher.Output
+
+    private let lock: NSLock = .init()
+    private var pending: [(subject: PassthroughSubject<Output, URLError>, output: Output)] = []
+
+    var pendingCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return pending.count
+    }
+
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        pending = []
+    }
+
+    func publisher(for urlRequest: URLRequest) -> Configuration.URLRequestPublisher {
+        let response = HTTPURLResponse(url: urlRequest.url!, statusCode: 200, httpVersion: "1.0", headerFields: [:])!
+        let output: Output = (data: urlRequest.httpBody!, response: response)
+
+        guard urlRequest.url!.lastPathComponent == "my-events" else {
+            return Just(output).setFailureType(to: URLError.self).eraseToAnyPublisher()
+        }
+
+        let subject: PassthroughSubject<Output, URLError> = .init()
+
+        lock.lock()
+        pending.append((subject, output))
+        lock.unlock()
+
+        return subject.eraseToAnyPublisher()
+    }
+
+    func completePending() {
+        lock.lock()
+        let inFlight = pending
+        pending = []
+        lock.unlock()
+
+        inFlight.forEach { subject, output in
+            subject.send(output)
+            subject.send(completion: .finished)
+        }
+    }
+}
+
 /// A minimal thread-safe box, so test doubles can be mutated from the `@Sendable` closures on `Current`
 final class Locked<Value>: @unchecked Sendable {
     private let lock: NSLock = .init()
@@ -528,6 +614,16 @@ extension Configuration {
         visitsPath: "my-visits",
         visitDuration: .oneHour,
         automaticVisitRenewal: false
+    )
+
+    static let deferredEventsTestDefault: Self = .init(
+        environment: .testDefault,
+        urlRequestHandler: { DeferredEventsRequestHandler.instance.publisher(for: $0) },
+        baseUrl: URL(string: "https://ahoy.com")!,
+        ahoyPath: "test-ahoy",
+        eventsPath: "my-events",
+        visitsPath: "my-visits",
+        visitDuration: .oneHour
     )
 
     static let visitParamsTestDefault: Self = .init(

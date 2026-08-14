@@ -41,7 +41,15 @@ public final class Ahoy: @unchecked Sendable {
 
     private var _requestInterceptors: [RequestInterceptor]
 
-    private var _cancellables: Set<AnyCancellable> = []
+    private var _lifecycleCancellable: AnyCancellable?
+
+    private var _nextEventId: Int = 0
+
+    /// Fire-and-forget subscriptions, retained only while the request is actually in flight
+    private var _inFlightEvents: [Int: AnyCancellable] = [:]
+
+    /// Ids whose request finished before `retain` could run, which a synchronous publisher does
+    private var _settledEvents: Set<Int> = []
 
     private var _attachedUserId: String?
 
@@ -143,11 +151,13 @@ public final class Ahoy: @unchecked Sendable {
 
     /// A fire-and-forget convenience function for tracking a single event
     public func track(_ eventName: String, properties: [String: any Encodable & Sendable] = [:]) {
+        let id = nextEventId()
+
         let cancellable = track(events: [.init(name: eventName, properties: properties)])
             .retry(3)
-            .sink(receiveCompletion: { _ in }, receiveValue: {})
+            .sink(receiveCompletion: { [weak self] _ in self?.settle(id) }, receiveValue: {})
 
-        store(cancellable)
+        retain(cancellable, for: id)
     }
 
     /// Attaches a User's ID to be encoded as a root key within subsequent event JSON payloads. NOTE: This does not authenticate the user on your server and is only useful for specially-handled cases.
@@ -186,7 +196,7 @@ public final class Ahoy: @unchecked Sendable {
             }
             .sink { _ in }
 
-        store(cancellable)
+        withLock { _lifecycleCancellable = cancellable }
     }
 
     private func withLock<R>(_ body: () -> R) -> R {
@@ -196,8 +206,44 @@ public final class Ahoy: @unchecked Sendable {
         return body()
     }
 
-    private func store(_ cancellable: AnyCancellable) {
-        withLock { _ = _cancellables.insert(cancellable) }
+    private func nextEventId() -> Int {
+        withLock {
+            _nextEventId += 1
+            return _nextEventId
+        }
+    }
+
+    /// Holds the subscription until its request completes. A publisher that completes synchronously has already
+    /// settled by the time this runs, in which case there is nothing to retain.
+    private func retain(_ cancellable: AnyCancellable, for id: Int) {
+        withLock {
+            if _settledEvents.remove(id) == nil {
+                _inFlightEvents[id] = cancellable
+            }
+        }
+    }
+
+    private func settle(_ id: Int) {
+        // Released outside the lock, so that deinitializing a cancellable can never re-enter it
+        let finished: AnyCancellable? = withLock {
+            guard let cancellable = _inFlightEvents.removeValue(forKey: id) else {
+                _settledEvents.insert(id)
+                return nil
+            }
+            return cancellable
+        }
+
+        _ = finished
+    }
+
+    /// The number of fire-and-forget subscriptions currently retained; exposed for testing
+    var inFlightEventCount: Int {
+        withLock { _inFlightEvents.count }
+    }
+
+    /// Ids awaiting a `retain` that will decline to store them; should never accumulate. Exposed for testing.
+    var settledEventCount: Int {
+        withLock { _settledEvents.count }
     }
 
     private func visitForTracking() -> AnyPublisher<Visit, Error> {
