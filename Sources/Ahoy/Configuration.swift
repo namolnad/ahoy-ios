@@ -1,10 +1,8 @@
-import Combine
 import Foundation
 
 @dynamicMemberLookup
 public struct Configuration: Sendable {
-    public typealias URLRequestPublisher = AnyPublisher<URLSession.DataTaskPublisher.Output, URLSession.DataTaskPublisher.Failure>
-    public typealias URLRequestHandler = @Sendable (URLRequest) -> URLRequestPublisher
+    public typealias URLRequestHandler = @Sendable (URLRequest) async throws -> (Data, URLResponse)
     public typealias VisitParamsProvider = @Sendable () -> [String: any Encodable & Sendable]?
 
     public struct ApplicationEnvironment: Sendable {
@@ -39,9 +37,7 @@ public struct Configuration: Sendable {
     ///     behalf during automatic renewal. Ignored for visits you track yourself via `trackVisit(additionalParams:)`.
     public init(
         environment: ApplicationEnvironment,
-        urlRequestHandler: @escaping URLRequestHandler = { request in
-            URLSession.shared.dataTaskPublisher(for: request).eraseToAnyPublisher()
-        },
+        urlRequestHandler: @escaping URLRequestHandler = { try await URLSession.shared.data(for: $0) },
         baseUrl: URL,
         ahoyPath: String = "ahoy",
         eventsPath: String = "events",

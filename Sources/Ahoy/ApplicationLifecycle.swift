@@ -25,4 +25,24 @@ enum ApplicationLifecycle {
         return nil
         #endif
     }
+
+    /// Activations as an async sequence. Only the most recent is buffered: a burst of activations while one is
+    /// being handled collapses to a single follow-up rather than a queue of redundant visit requests.
+    static func activations(named name: Notification.Name) -> AsyncStream<Void> {
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let center = Current.notificationCenter
+
+            nonisolated(unsafe) let token = center.addObserver(
+                forName: name,
+                object: nil,
+                queue: nil
+            ) { _ in
+                continuation.yield(())
+            }
+
+            continuation.onTermination = { _ in
+                center.removeObserver(token)
+            }
+        }
+    }
 }
