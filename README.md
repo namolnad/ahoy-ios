@@ -16,6 +16,8 @@ The Ahoy library can be easily installed using Swift Package Manager. See the [A
 
 Requires Swift 6 (Xcode 16 or later). The package builds in the Swift 6 language mode. `Ahoy` is an actor, so one instance can be shared freely across actors and tasks.
 
+Coming from 0.5.0 or earlier? See [Migrating from 0.5.0](#migrating-from-050).
+
 ## Usage
 
 To get started you need to initialize an instance of an Ahoy client. The initializer takes a configuration object, which requires you to provide a `baseUrl` as well as an `ApplicationEnvironment` object.
@@ -134,3 +136,92 @@ for await visit in ahoy.visits {
     print(visit)
 }
 ```
+
+## Migrating from 0.5.0
+
+0.6.0 replaced Combine with async/await and made `Ahoy` an actor. Every call site changes, but the changes are mechanical. Nothing about `Event`, `Visit`, `AhoyTokenManager` or `RequestInterceptor` changed.
+
+### Tracking
+
+`trackVisit`, `track(events:)` and `ensureCurrentVisit` are async throwing functions.
+
+``` swift
+// 0.5.0
+ahoy.trackVisit()
+    .sink(receiveCompletion: { _ in }, receiveValue: { visit in print(visit) })
+    .store(in: &cancellables)
+
+// 0.6
+let visit = try await ahoy.trackVisit()
+```
+
+``` swift
+// 0.5.0
+ahoy.track(events: pendingEvents)
+    .sink(receiveCompletion: { _ in }, receiveValue: { pendingEvents.removeAll() })
+    .store(in: &cancellables)
+
+// 0.6
+try await ahoy.track(events: pendingEvents)
+pendingEvents.removeAll()
+```
+
+The fire-and-forget `track(_:properties:)` is **unchanged**, and still needs no `await` or surrounding `Task`:
+
+``` swift
+ahoy.track("ride_details.update_driver_rating", properties: ["driver_id": 4])
+```
+
+### Observing visits
+
+`currentVisitPublisher` becomes `visits`. Each call returns an independent sequence that begins with the current visit, which is the replay a new subscriber used to get.
+
+``` swift
+// 0.5.0
+ahoy.currentVisitPublisher
+    .sink(receiveCompletion: { _ in }, receiveValue: { visit in print(visit) })
+    .store(in: &cancellables)
+
+// 0.6
+for await visit in ahoy.visits {
+    print(visit)
+}
+```
+
+### Actor-isolated members
+
+`currentVisit`, `headers`, `attach(userId:)` and `detachUser()` keep their shapes but now need `await`. `requestInterceptors` becomes read-only — Swift does not permit cross-actor property writes — so assign through `setRequestInterceptors(_:)`.
+
+``` swift
+// 0.5.0
+let visit = ahoy.currentVisit
+request.allHTTPHeaderFields = ahoy.headers
+ahoy.attach(userId: "12345")
+ahoy.requestInterceptors = [interceptor]
+
+// 0.6
+let visit = await ahoy.currentVisit
+request.allHTTPHeaderFields = await ahoy.headers
+await ahoy.attach(userId: "12345")
+await ahoy.setRequestInterceptors([interceptor])
+```
+
+### Custom request handlers
+
+`Configuration.URLRequestPublisher` is removed, and `urlRequestHandler` is async.
+
+``` swift
+// 0.5.0
+let handler: Configuration.URLRequestHandler = { request in
+    URLSession.shared.dataTaskPublisher(for: request).eraseToAnyPublisher()
+}
+
+// 0.6
+let handler: Configuration.URLRequestHandler = { request in
+    try await URLSession.shared.data(for: request)
+}
+```
+
+### Where you build the client
+
+From 0.6.1, Ahoy reads the vendor identifier when the client is initialized, because `UIDevice` only surrenders it on the main actor while visitor tokens are minted elsewhere. Build the client on the main actor, as shown at the top of this README. A client built off the main actor falls back to a randomly generated visitor token, which is then persisted exactly as the vendor identifier would have been — so existing installs are unaffected, but fresh ones would not share the vendor identifier.
