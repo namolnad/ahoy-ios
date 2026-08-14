@@ -19,19 +19,26 @@ Requires Swift 6 (Xcode 16 or later). The package builds in the Swift 6 language
 ## Usage
 
 To get started you need to initialize an instance of an Ahoy client. The initializer takes a configuration object, which requires you to provide a `baseUrl` as well as an `ApplicationEnvironment` object.
+
+`UIDevice` is main-actor isolated, so build the client there — from your `App` initializer, for example. `Ahoy` is an actor, so the instance can be shared anywhere once it exists.
+
 ``` swift
 import Ahoy
+import UIKit
 
-let ahoy: Ahoy = .init(
-    configuration: .init(
-    environment: .init(
-        platform: UIDevice.current.systemName,
-        appVersion: "1.0.2",
-        osVersion: UIDevice.current.systemVersion
-    ),
-    baseUrl: URL(string: "https://your-server.com")!
-  )
-)
+@MainActor
+func makeAhoyClient() -> Ahoy {
+    .init(
+        configuration: .init(
+            environment: .init(
+                platform: UIDevice.current.systemName,
+                appVersion: "1.0.2",
+                osVersion: UIDevice.current.systemVersion
+            ),
+            baseUrl: URL(string: "https://your-server.com")!
+        )
+    )
+}
 ```
 ### Configuration
 The configuation object has intelligent defaults _(listed below in parens)_, but allows you to a to provide overrides for a series of values:
@@ -65,9 +72,9 @@ If your visits carry attribution data such as utm parameters or a referrer, supp
 ``` swift
 let ahoy: Ahoy = .init(
     configuration: .init(
-        environment: .init(/* ... */),
+        environment: environment,
         baseUrl: URL(string: "https://your-server.com")!,
-        visitParams: { ["utm_source": deepLink.utmSource] }
+        visitParams: { ["utm_source": currentAttribution.utmSource] }
     )
 )
 ```
