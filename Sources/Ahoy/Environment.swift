@@ -6,7 +6,8 @@ struct Environment: Sendable {
     var visitorToken: @Sendable () -> UUID = visitorTokenProvider
     /// `UserDefaults` is documented as thread-safe, but carries no `Sendable` conformance
     nonisolated(unsafe) var defaults: UserDefaults = .standard
-    var didBecomeActiveNotification: Notification.Name? = ApplicationLifecycle.didBecomeActiveNotification
+    /// Resolved on use rather than captured at initialization, so that it is read after `ApplicationLifecycle.prime()`
+    var didBecomeActiveNotification: @Sendable () -> Notification.Name? = { ApplicationLifecycle.didBecomeActiveNotification }
     var notificationCenter: NotificationCenter = .default
 }
 
@@ -17,24 +18,39 @@ nonisolated(unsafe) var Current: Environment = .init()
 let Current: Environment = .init()
 #endif
 
+/// Reads the vendor identifier while the caller may still be on the main actor. Visitor tokens are minted on
+/// Ahoy's executor, where the platform will not hand it over, so it has to be resolved ahead of that.
+/// A no-op on platforms with no vendor identifier to read.
+func primeVendorIdentifier() {
+    #if canImport(WatchKit) || canImport(UIKit)
+    _ = vendorIdentifier.resolve()
+    #endif
+}
+
 #if canImport(WatchKit)
 import WatchKit
 
+let vendorIdentifier: MainActorCache<UUID> = .init { WKInterfaceDevice.current().identifierForVendor }
+
 let visitorTokenProvider: @Sendable () -> UUID = {
-    WKInterfaceDevice.current().identifierForVendor ?? Current.uuid()
+    vendorIdentifier.resolve() ?? Current.uuid()
 }
 #elseif canImport(UIKit)
 import UIKit
 
+let vendorIdentifier: MainActorCache<UUID> = .init { UIDevice.current.identifierForVendor }
+
 let visitorTokenProvider: @Sendable () -> UUID = {
-    UIDevice.current.identifierForVendor ?? Current.uuid()
+    vendorIdentifier.resolve() ?? Current.uuid()
 }
 #elseif canImport(AppKit)
 import AppKit
 
 let visitorTokenProvider: @Sendable () -> UUID = {
     let matchingDict = IOServiceMatching("IOPlatformExpertDevice")
-    let platformExpert = IOServiceGetMatchingService(kIOMasterPortDefault, matchingDict)
+    // `kIOMainPortDefault` needs macOS 12 and its predecessor `kIOMasterPortDefault` is deprecated; both are
+    // the null port, which `IOServiceGetMatchingService` reads as "the default I/O Kit port"
+    let platformExpert = IOServiceGetMatchingService(mach_port_t(MACH_PORT_NULL), matchingDict)
 
     defer { IOObjectRelease(platformExpert) }
 
@@ -49,5 +65,9 @@ let visitorTokenProvider: @Sendable () -> UUID = {
     else { return Current.uuid() }
 
     return uuid
+}
+#else
+let visitorTokenProvider: @Sendable () -> UUID = {
+    Current.uuid()
 }
 #endif
