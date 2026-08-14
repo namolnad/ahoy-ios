@@ -20,7 +20,7 @@ final class AhoyTests: XCTestCase {
         Current.defaults = TestDefaults.instance
         Current.date = { .init(timeIntervalSince1970: 0) }
         Current.visitorToken = { UUID(uuidString: "EB4DCB73-2B32-52CD-A2CF-AD7948674B22")! }
-        Current.didBecomeActiveNotification = .init("ahoy_test_did_become_active")
+        Current.didBecomeActiveNotification = { .init("ahoy_test_did_become_active") }
         Current.notificationCenter = .init()
 
         ahoy = .init(configuration: configuration)
@@ -404,6 +404,43 @@ final class AhoyTests: XCTestCase {
         XCTAssertFalse(manager.hasValidVisitToken)
     }
 
+    // MARK: - Main-actor cache
+
+    /// `UIDevice`/`WKInterfaceDevice` only surrender the vendor identifier on the main actor, but visitor
+    /// tokens are minted on Ahoy's executor. The value has to survive the trip.
+    func testMainActorCacheReadsThroughOnMainAndServesOtherThreads() async {
+        let reads: Locked<Int> = .init(0)
+        let cache: MainActorCache<UUID> = .init {
+            reads.mutate { $0 += 1 }
+            return .firstToken
+        }
+
+        let beforeAnyRead = await offMainThread { cache.resolve() }
+        XCTAssertNil(beforeAnyRead, "Nothing is cached, and the value cannot be read from here")
+        XCTAssertEqual(reads.current, 0)
+
+        let onMain = await MainActor.run { cache.resolve() }
+        XCTAssertEqual(onMain, .firstToken)
+        XCTAssertEqual(reads.current, 1)
+
+        let afterCaching = await offMainThread { cache.resolve() }
+        XCTAssertEqual(afterCaching, .firstToken, "Now available everywhere")
+        XCTAssertEqual(reads.current, 1, "Without reading through a second time")
+    }
+
+    func testMainActorCacheDoesNotCacheAMissingValue() async {
+        let reads: Locked<Int> = .init(0)
+        let cache: MainActorCache<UUID> = .init {
+            reads.mutate { $0 += 1 }
+            return nil
+        }
+
+        _ = await MainActor.run { cache.resolve() }
+        _ = await MainActor.run { cache.resolve() }
+
+        XCTAssertEqual(reads.current, 2, "A device that returned nothing is retried rather than remembered")
+    }
+
     // MARK: - Concurrency
 
     /// Needs only to compile: the public surface has to be shareable for the client to be usable at all
@@ -446,11 +483,17 @@ final class AhoyTests: XCTestCase {
     }
 
     private func postDidBecomeActive() {
-        Current.notificationCenter.post(name: Current.didBecomeActiveNotification!, object: nil)
+        Current.notificationCenter.post(name: Current.didBecomeActiveNotification()!, object: nil)
     }
 
     private func track(named name: String, on ahoy: Ahoy) async throws {
         try await ahoy.track(events: [.init(name: name, properties: [:], time: .init(timeIntervalSince1970: 0))])
+    }
+
+    private func offMainThread<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { continuation.resume(returning: body()) }
+        }
     }
 
     /// Lets already-scheduled work run without introducing a wall-clock sleep

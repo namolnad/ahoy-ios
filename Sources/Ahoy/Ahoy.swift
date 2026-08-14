@@ -50,6 +50,10 @@ public actor Ahoy {
         requestInterceptors: [RequestInterceptor] = [],
         storage: AhoyTokenManager? = nil
     ) {
+        // Before any visit can be tracked, and while the caller may still be on the main actor
+        primeVendorIdentifier()
+        ApplicationLifecycle.prime()
+
         self.configuration = configuration
         self.requestInterceptors = requestInterceptors
         if let storage = storage {
@@ -243,7 +247,7 @@ public actor Ahoy {
 
     /// Renews the visit whenever the application becomes active — the platform's analogue of a web page load.
     private func observeApplicationBecomingActive() {
-        guard let notificationName = Current.didBecomeActiveNotification else { return }
+        guard let notificationName = Current.didBecomeActiveNotification() else { return }
 
         let activations = ApplicationLifecycle.activations(named: notificationName)
 

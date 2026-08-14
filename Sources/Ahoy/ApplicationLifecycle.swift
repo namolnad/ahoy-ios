@@ -2,6 +2,14 @@ import Foundation
 
 #if canImport(WatchKit)
 import WatchKit
+
+/// `WKExtension` is main-actor isolated, even for a notification name
+private let didBecomeActiveNotificationCache: MainActorCache<Notification.Name> = .init {
+    if #available(watchOS 7.0, *) {
+        return WKExtension.applicationDidBecomeActiveNotification
+    }
+    return nil
+}
 #elseif canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -13,16 +21,20 @@ enum ApplicationLifecycle {
     /// `nil` on platforms which offer no such notification, in which case renewal happens lazily at event-tracking time.
     static var didBecomeActiveNotification: Notification.Name? {
         #if canImport(WatchKit)
-        if #available(watchOS 7.0, *) {
-            return WKExtension.applicationDidBecomeActiveNotification
-        }
-        return nil
+        return didBecomeActiveNotificationCache.resolve()
         #elseif canImport(UIKit)
         return UIApplication.didBecomeActiveNotification
         #elseif canImport(AppKit)
         return NSApplication.didBecomeActiveNotification
         #else
         return nil
+        #endif
+    }
+
+    /// Resolves anything the platform only exposes on the main actor. See `primeVendorIdentifier`.
+    static func prime() {
+        #if canImport(WatchKit)
+        _ = didBecomeActiveNotificationCache.resolve()
         #endif
     }
 
