@@ -1,11 +1,8 @@
-import Combine
 import Foundation
 
-public final class Ahoy: @unchecked Sendable {
+public actor Ahoy {
     /// The currently registered visit. Nil until a visit has been confirmed with your server
-    public var currentVisit: Visit? {
-        currentVisitSubject.value
-    }
+    public private(set) var currentVisit: Visit?
 
     /// A convenience access point for your application to get Ahoy headers for the current visit
     public var headers: [String: String] {
@@ -17,47 +14,36 @@ public final class Ahoy: @unchecked Sendable {
         ]
     }
 
-    /// A publisher to allow your application to listen for changes to the `currentVisit`
-    public var currentVisitPublisher: AnyPublisher<Visit, Error> {
-        currentVisitSubject
-            .compactMap { $0 }
-            .eraseToAnyPublisher()
-    }
-
     /// Hooks for your application to modify the Ahoy requests prior to performing the request
-    public var requestInterceptors: [RequestInterceptor] {
-        get { withLock { _requestInterceptors } }
-        set { withLock { _requestInterceptors = newValue } }
-    }
+    public private(set) var requestInterceptors: [RequestInterceptor]
 
-    private let currentVisitSubject: CurrentValueSubject<Visit?, Error> = .init(nil)
+    /// Each newly registered visit, beginning with the current one if there is one.
+    /// Every call returns an independent sequence, so several observers can iterate at once.
+    public nonisolated var visits: AsyncStream<Visit> {
+        let id: UUID = .init()
+
+        return AsyncStream { continuation in
+            Task { await self.addVisitObserver(id: id, continuation: continuation) }
+
+            continuation.onTermination = { _ in
+                Task { await self.removeVisitObserver(id: id) }
+            }
+        }
+    }
 
     private let configuration: Configuration
 
     private let storage: AhoyTokenManager
 
-    /// Guards every mutable property below, so that an `Ahoy` client can be shared across isolation domains
-    private let lock: NSLock = .init()
-
-    private var _requestInterceptors: [RequestInterceptor]
-
-    private var _lifecycleCancellable: AnyCancellable?
-
-    private var _nextEventId: Int = 0
-
-    /// Fire-and-forget subscriptions, retained only while the request is actually in flight
-    private var _inFlightEvents: [Int: AnyCancellable] = [:]
-
-    /// Ids whose request finished before `retain` could run, which a synchronous publisher does
-    private var _settledEvents: Set<Int> = []
-
-    private var _attachedUserId: String?
-
     /// Retained across visits so that a user attached via `attach(userId:)` survives visit renewal
-    private var attachedUserId: String? {
-        get { withLock { _attachedUserId } }
-        set { withLock { _attachedUserId = newValue } }
-    }
+    private var attachedUserId: String?
+
+    /// The visit request currently in flight, shared by every caller that arrives while it runs
+    private var pendingVisit: Task<Visit, Error>?
+
+    private var visitObservers: [UUID: AsyncStream<Visit>.Continuation] = [:]
+
+    private var lifecycleTask: Task<Void, Never>?
 
     public init(
         configuration: Configuration,
@@ -65,7 +51,7 @@ public final class Ahoy: @unchecked Sendable {
         storage: AhoyTokenManager? = nil
     ) {
         self.configuration = configuration
-        self._requestInterceptors = requestInterceptors
+        self.requestInterceptors = requestInterceptors
         if let storage = storage {
             self.storage = storage
         } else if let visitDuration = configuration.visitDuration {
@@ -75,14 +61,125 @@ public final class Ahoy: @unchecked Sendable {
         }
 
         if configuration.automaticVisitRenewal {
-            observeApplicationBecomingActive()
+            Task { await self.observeApplicationBecomingActive() }
         }
+    }
+
+    deinit {
+        lifecycleTask?.cancel()
+        visitObservers.values.forEach { $0.finish() }
     }
 
     /// Tracks a visit. Can be called multiple times during a session—a new visit will be created as determined by your `TokenManager`.
     /// Calling this is only required when you have disabled `automaticVisitRenewal`, or when you wish to supply
     /// `additionalParams` for a specific visit.
-    public func trackVisit(additionalParams: [String: any Encodable & Sendable]? = nil) -> AnyPublisher<Visit, Error> {
+    @discardableResult
+    public func trackVisit(additionalParams: [String: any Encodable & Sendable]? = nil) async throws -> Visit {
+        try await performTrackVisit(additionalParams: additionalParams)
+    }
+
+    /// Returns the current visit, registering a new one when the stored visit token has expired or has yet to be
+    /// confirmed with your server. This mirrors ahoy.js, which creates a visit on page load and lazily whenever an
+    /// event is tracked after the visit cookie has lapsed.
+    ///
+    /// Callers arriving while a visit request is already in flight await that same request rather than starting another.
+    @discardableResult
+    public func ensureCurrentVisit() async throws -> Visit {
+        // `hasValidVisitToken` must be consulted first: reading an expired `visitToken` mints a replacement.
+        if let visit = currentVisit, storage.hasValidVisitToken, visit.visitToken == storage.visitToken {
+            return visit
+        }
+
+        if let pendingVisit = pendingVisit {
+            return try await pendingVisit.value
+        }
+
+        let additionalParams = configuration.visitParams()
+        // Assigned before the first suspension below, so a reentrant caller finds it rather than starting its own
+        let task: Task<Visit, Error> = Task { try await self.performTrackVisit(additionalParams: additionalParams) }
+        pendingVisit = task
+
+        let result = await task.result
+        pendingVisit = nil
+
+        return try result.get()
+    }
+
+    /// Bulk-tracking events
+    public func track(events: [Event]) async throws {
+        let visit = try await visitForTracking()
+
+        let requestInput: EventRequestInput = .init(
+            visitorToken: visit.visitorToken,
+            visitToken: visit.visitToken,
+            events: events.map { .init(userId: visit.userId, wrapped: $0) }
+        )
+
+        let (data, response) = try await perform(
+            path: configuration.eventsPath,
+            body: requestInput,
+            visit: visit
+        )
+
+        try validate(data: data, response: response)
+    }
+
+    /// A fire-and-forget convenience function for tracking a single event. Callable from anywhere—the event is
+    /// timestamped immediately and delivered on a detached task, retrying a few times before giving up.
+    public nonisolated func track(_ eventName: String, properties: [String: any Encodable & Sendable] = [:]) {
+        let event: Event = .init(name: eventName, properties: properties)
+
+        Task { await self.trackDiscardingErrors(event) }
+    }
+
+    /// Attaches a User's ID to be encoded as a root key within subsequent event JSON payloads. NOTE: This does not authenticate the user on your server and is only useful for specially-handled cases.
+    /// Example event payload `{"properties":{"123":456},"user_id":"12345","name":"test","time":"1970-01-01T00:00:00Z"}`
+    /// The attachment persists across visit renewals until `detachUser()` is called.
+    public func attach(userId: String) {
+        attachedUserId = userId
+
+        if var visit = currentVisit {
+            visit.userId = userId
+            update(currentVisit: visit)
+        }
+    }
+
+    /// Clears a user previously attached with `attach(userId:)`, e.g. on sign-out.
+    public func detachUser() {
+        attachedUserId = nil
+
+        if var visit = currentVisit {
+            visit.userId = nil
+            update(currentVisit: visit)
+        }
+    }
+
+    /// Replaces the interceptors applied to subsequent Ahoy requests
+    public func setRequestInterceptors(_ interceptors: [RequestInterceptor]) {
+        requestInterceptors = interceptors
+    }
+
+    private func trackDiscardingErrors(_ event: Event) async {
+        for attempt in 0...Self.trackRetryCount {
+            do {
+                return try await track(events: [event])
+            } catch {
+                if attempt == Self.trackRetryCount { return }
+            }
+        }
+    }
+
+    private func visitForTracking() async throws -> Visit {
+        guard configuration.automaticVisitRenewal else {
+            guard let currentVisit = currentVisit else { throw AhoyError.noVisit }
+
+            return currentVisit
+        }
+
+        return try await ensureCurrentVisit()
+    }
+
+    private func performTrackVisit(additionalParams: [String: any Encodable & Sendable]?) async throws -> Visit {
         let visit: Visit = .init(
             visitorToken: storage.visitorToken,
             visitToken: storage.visitToken,
@@ -99,181 +196,30 @@ public final class Ahoy: @unchecked Sendable {
             additionalParams: additionalParams
         )
 
-        return dataTaskPublisher(
+        let (data, response) = try await perform(
             path: configuration.visitsPath,
             body: requestInput,
             visit: visit
         )
-            .validateResponse()
-            .map { $0.0 }
-            .decode(type: Visit.self, decoder: Self.jsonDecoder)
-            .tryMap { visitResponse -> Visit in
-                guard
-                    visit.visitorToken == visitResponse.visitorToken,
-                    visit.visitToken == visitResponse.visitToken
-                else {
-                    throw AhoyError.mismatchingVisit
-                }
-                // Pass back the visit created by the client (which has custom variables)
-                return visit
-            }
-            .handleEvents(receiveOutput: { [weak self] visit in
-                self?.currentVisitSubject.send(visit)
-            })
-            .eraseToAnyPublisher()
-    }
 
-    /// Returns the current visit, registering a new one when the stored visit token has expired or has yet to be
-    /// confirmed with your server. This mirrors ahoy.js, which creates a visit on page load and lazily whenever an
-    /// event is tracked after the visit cookie has lapsed.
-    public func ensureCurrentVisit() -> AnyPublisher<Visit, Error> {
-        // `hasValidVisitToken` must be consulted first: reading an expired `visitToken` mints a replacement.
-        if let visit = currentVisit, storage.hasValidVisitToken, visit.visitToken == storage.visitToken {
-            return Just(visit)
-                .setFailureType(to: Error.self)
-                .eraseToAnyPublisher()
+        try validate(data: data, response: response)
+
+        let visitResponse = try Self.jsonDecoder.decode(Visit.self, from: data)
+
+        guard
+            visit.visitorToken == visitResponse.visitorToken,
+            visit.visitToken == visitResponse.visitToken
+        else {
+            throw AhoyError.mismatchingVisit
         }
 
-        return trackVisit(additionalParams: configuration.visitParams())
+        // Keep the visit created by the client, which carries the custom variables
+        update(currentVisit: visit)
+
+        return visit
     }
 
-    /// Bulk-tracking events
-    public func track(events: [Event]) -> AnyPublisher<Void, Error> {
-        visitForTracking()
-            .flatMap { [weak self] visit -> AnyPublisher<Void, Error> in
-                guard let self = self else {
-                    return Fail(error: AhoyError.noVisit).eraseToAnyPublisher()
-                }
-                return self.send(events: events, visit: visit)
-            }
-            .eraseToAnyPublisher()
-    }
-
-    /// A fire-and-forget convenience function for tracking a single event
-    public func track(_ eventName: String, properties: [String: any Encodable & Sendable] = [:]) {
-        let id = nextEventId()
-
-        let cancellable = track(events: [.init(name: eventName, properties: properties)])
-            .retry(3)
-            .sink(receiveCompletion: { [weak self] _ in self?.settle(id) }, receiveValue: {})
-
-        retain(cancellable, for: id)
-    }
-
-    /// Attaches a User's ID to be encoded as a root key within subsequent event JSON payloads. NOTE: This does not authenticate the user on your server and is only useful for specially-handled cases.
-    /// Example event payload `{"properties":{"123":456},"user_id":"12345","name":"test","time":"1970-01-01T00:00:00Z"}`
-    /// The attachment persists across visit renewals until `detachUser()` is called.
-    public func attach(userId: String) {
-        attachedUserId = userId
-        var currentVisit = currentVisitSubject.value
-        currentVisit?.userId = userId
-        currentVisitSubject.send(currentVisit)
-    }
-
-    /// Clears a user previously attached with `attach(userId:)`, e.g. on sign-out.
-    public func detachUser() {
-        attachedUserId = nil
-        var currentVisit = currentVisitSubject.value
-        currentVisit?.userId = nil
-        currentVisitSubject.send(currentVisit)
-    }
-
-    /// Renews the visit whenever the application becomes active — the platform's analogue of a web page load.
-    private func observeApplicationBecomingActive() {
-        guard let notificationName = Current.didBecomeActiveNotification else { return }
-
-        let cancellable = Current.notificationCenter
-            .publisher(for: notificationName)
-            // `.max(1)` so that a burst of activations can't pile up overlapping visit requests
-            .flatMap(maxPublishers: .max(1)) { [weak self] _ -> AnyPublisher<Visit, Never> in
-                guard let self = self else {
-                    return Empty().eraseToAnyPublisher()
-                }
-                // A no-op when the visit is still current
-                return self.ensureCurrentVisit()
-                    .catch { _ in Empty<Visit, Never>() }
-                    .eraseToAnyPublisher()
-            }
-            .sink { _ in }
-
-        withLock { _lifecycleCancellable = cancellable }
-    }
-
-    private func withLock<R>(_ body: () -> R) -> R {
-        lock.lock()
-        defer { lock.unlock() }
-
-        return body()
-    }
-
-    private func nextEventId() -> Int {
-        withLock {
-            _nextEventId += 1
-            return _nextEventId
-        }
-    }
-
-    /// Holds the subscription until its request completes. A publisher that completes synchronously has already
-    /// settled by the time this runs, in which case there is nothing to retain.
-    private func retain(_ cancellable: AnyCancellable, for id: Int) {
-        withLock {
-            if _settledEvents.remove(id) == nil {
-                _inFlightEvents[id] = cancellable
-            }
-        }
-    }
-
-    private func settle(_ id: Int) {
-        // Released outside the lock, so that deinitializing a cancellable can never re-enter it
-        let finished: AnyCancellable? = withLock {
-            guard let cancellable = _inFlightEvents.removeValue(forKey: id) else {
-                _settledEvents.insert(id)
-                return nil
-            }
-            return cancellable
-        }
-
-        _ = finished
-    }
-
-    /// The number of fire-and-forget subscriptions currently retained; exposed for testing
-    var inFlightEventCount: Int {
-        withLock { _inFlightEvents.count }
-    }
-
-    /// Ids awaiting a `retain` that will decline to store them; should never accumulate. Exposed for testing.
-    var settledEventCount: Int {
-        withLock { _settledEvents.count }
-    }
-
-    private func visitForTracking() -> AnyPublisher<Visit, Error> {
-        guard configuration.automaticVisitRenewal else {
-            return currentVisit.map {
-                Just($0).setFailureType(to: Error.self).eraseToAnyPublisher()
-            } ?? Fail(error: AhoyError.noVisit).eraseToAnyPublisher()
-        }
-
-        return ensureCurrentVisit()
-    }
-
-    private func send(events: [Event], visit: Visit) -> AnyPublisher<Void, Error> {
-        let requestInput: EventRequestInput = .init(
-            visitorToken: visit.visitorToken,
-            visitToken: visit.visitToken,
-            events: events.map { .init(userId: visit.userId, wrapped: $0) }
-        )
-
-        return dataTaskPublisher(
-            path: configuration.eventsPath,
-            body: requestInput,
-            visit: visit
-        )
-            .validateResponse()
-            .map { _, _ in }
-            .eraseToAnyPublisher()
-    }
-
-    private func dataTaskPublisher<Body: Encodable>(path: String, body: Body, visit: Visit) -> Configuration.URLRequestPublisher {
+    private func perform<Body: Encodable>(path: String, body: Body, visit: Visit) async throws -> (Data, URLResponse) {
         var request: URLRequest = .init(
             url: configuration.baseUrl
                 .appendingPathComponent(configuration.ahoyPath)
@@ -292,8 +238,44 @@ public final class Ahoy: @unchecked Sendable {
 
         ahoyHeaders.forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
-        return configuration.urlRequestHandler(request)
+        return try await configuration.urlRequestHandler(request)
     }
+
+    /// Renews the visit whenever the application becomes active — the platform's analogue of a web page load.
+    private func observeApplicationBecomingActive() {
+        guard let notificationName = Current.didBecomeActiveNotification else { return }
+
+        let activations = ApplicationLifecycle.activations(named: notificationName)
+
+        // Serial by construction: the next activation is not read until this one is handled
+        lifecycleTask = Task { [weak self] in
+            for await _ in activations {
+                // A no-op when the visit is still current
+                _ = try? await self?.ensureCurrentVisit()
+            }
+        }
+    }
+
+    private func update(currentVisit visit: Visit) {
+        currentVisit = visit
+        visitObservers.values.forEach { $0.yield(visit) }
+    }
+
+    private func addVisitObserver(id: UUID, continuation: AsyncStream<Visit>.Continuation) {
+        visitObservers[id] = continuation
+
+        // Replays the current visit, matching the behavior observers relied on previously
+        if let currentVisit = currentVisit {
+            continuation.yield(currentVisit)
+        }
+    }
+
+    private func removeVisitObserver(id: UUID) {
+        visitObservers.removeValue(forKey: id)
+    }
+
+    /// Attempts beyond the first, for fire-and-forget tracking
+    private static let trackRetryCount = 3
 
     private static let jsonEncoder: JSONEncoder = {
         let encoder: JSONEncoder = .init()
