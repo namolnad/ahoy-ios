@@ -5,6 +5,7 @@ import Foundation
 public struct Configuration {
     public typealias URLRequestPublisher = AnyPublisher<URLSession.DataTaskPublisher.Output, URLSession.DataTaskPublisher.Failure>
     public typealias URLRequestHandler = (URLRequest) -> URLRequestPublisher
+    public typealias VisitParamsProvider = () -> [String: Encodable]?
 
     public struct ApplicationEnvironment {
         let platform: String
@@ -25,7 +26,17 @@ public struct Configuration {
     let eventsPath: String
     let visitsPath: String
     let visitDuration: TimeInterval?
+    let automaticVisitRenewal: Bool
+    let visitParams: VisitParamsProvider
 
+    /// - Parameters:
+    ///   - visitDuration: How long a visit remains valid, measured from its creation. Defaults to four hours,
+    ///     matching ahoy.js and the Ahoy gem's `Ahoy.visit_duration`.
+    ///   - automaticVisitRenewal: When enabled (the default), Ahoy registers a new visit whenever the current one
+    ///     has expired — both when your application becomes active and lazily when you track an event. Disable this
+    ///     to take full control of visit creation via `trackVisit`.
+    ///   - visitParams: Supplies the params — utm parameters, referrer, etc. — for visits Ahoy creates on your
+    ///     behalf during automatic renewal. Ignored for visits you track yourself via `trackVisit(additionalParams:)`.
     public init(
         environment: ApplicationEnvironment,
         urlRequestHandler: @escaping URLRequestHandler = { request in
@@ -35,7 +46,9 @@ public struct Configuration {
         ahoyPath: String = "ahoy",
         eventsPath: String = "events",
         visitsPath: String = "visits",
-        visitDuration: TimeInterval? = nil
+        visitDuration: TimeInterval? = nil,
+        automaticVisitRenewal: Bool = true,
+        visitParams: @escaping VisitParamsProvider = { nil }
     ) {
         self.environment = environment
         self.urlRequestHandler = urlRequestHandler
@@ -44,6 +57,8 @@ public struct Configuration {
         self.eventsPath = eventsPath
         self.visitsPath = visitsPath
         self.visitDuration = visitDuration
+        self.automaticVisitRenewal = automaticVisitRenewal
+        self.visitParams = visitParams
     }
 
     subscript<T>(dynamicMember keyPath: KeyPath<ApplicationEnvironment, T>) -> T {

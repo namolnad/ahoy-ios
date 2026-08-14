@@ -35,6 +35,9 @@ public final class Ahoy {
 
     private var cancellables: Set<AnyCancellable> = []
 
+    /// Retained across visits so that a user attached via `attach(userId:)` survives visit renewal
+    private var attachedUserId: String?
+
     public init(
         configuration: Configuration,
         requestInterceptors: [RequestInterceptor] = [],
@@ -42,18 +45,27 @@ public final class Ahoy {
     ) {
         self.configuration = configuration
         self.requestInterceptors = requestInterceptors
-        if storage == nil, let visitDuration = configuration.visitDuration {
-            TokenManager.visitDuration = visitDuration
+        if let storage = storage {
+            self.storage = storage
+        } else if let visitDuration = configuration.visitDuration {
+            self.storage = TokenManager(visitDuration: visitDuration)
+        } else {
+            self.storage = TokenManager()
         }
-        self.storage = storage ?? TokenManager()
+
+        if configuration.automaticVisitRenewal {
+            observeApplicationBecomingActive()
+        }
     }
 
-    /// Tracks a visit. A visit *must* be tracked prior to tracking events so a `visitToken` can be associated with the event.
-    /// Can be called multiple times during a session—a new visit will be created as determined by your `TokenManager`.
+    /// Tracks a visit. Can be called multiple times during a session—a new visit will be created as determined by your `TokenManager`.
+    /// Calling this is only required when you have disabled `automaticVisitRenewal`, or when you wish to supply
+    /// `additionalParams` for a specific visit.
     public func trackVisit(additionalParams: [String: Encodable]? = nil) -> AnyPublisher<Visit, Error> {
         let visit: Visit = .init(
             visitorToken: storage.visitorToken,
             visitToken: storage.visitToken,
+            userId: attachedUserId,
             additionalParams: additionalParams
         )
 
@@ -90,27 +102,29 @@ public final class Ahoy {
             .eraseToAnyPublisher()
     }
 
-    /// Bulk-tracking events
-    public func track(events: [Event]) -> AnyPublisher<Void, Error> {
-        guard let currentVisit = currentVisit else {
-            return Fail(error: AhoyError.noVisit)
+    /// Returns the current visit, registering a new one when the stored visit token has expired or has yet to be
+    /// confirmed with your server. This mirrors ahoy.js, which creates a visit on page load and lazily whenever an
+    /// event is tracked after the visit cookie has lapsed.
+    public func ensureCurrentVisit() -> AnyPublisher<Visit, Error> {
+        // `hasValidVisitToken` must be consulted first: reading an expired `visitToken` mints a replacement.
+        if let visit = currentVisit, storage.hasValidVisitToken, visit.visitToken == storage.visitToken {
+            return Just(visit)
+                .setFailureType(to: Error.self)
                 .eraseToAnyPublisher()
         }
 
-        let requestInput: EventRequestInput = .init(
-            visitorToken: currentVisit.visitorToken,
-            visitToken: currentVisit.visitToken,
-            events: events.map { .init(userId: currentVisit.userId, wrapped: $0) }
-        )
+        return trackVisit(additionalParams: configuration.visitParams())
+    }
 
-        return dataTaskPublisher(
-            path: configuration.eventsPath,
-            body: requestInput,
-            visit: currentVisit
-        )
-            .validateResponse()
-            .map { _, _ in }
-            .mapError { $0 }
+    /// Bulk-tracking events
+    public func track(events: [Event]) -> AnyPublisher<Void, Error> {
+        visitForTracking()
+            .flatMap { [weak self] visit -> AnyPublisher<Void, Error> in
+                guard let self = self else {
+                    return Fail(error: AhoyError.noVisit).eraseToAnyPublisher()
+                }
+                return self.send(events: events, visit: visit)
+            }
             .eraseToAnyPublisher()
     }
 
@@ -124,10 +138,67 @@ public final class Ahoy {
 
     /// Attaches a User's ID to be encoded as a root key within subsequent event JSON payloads. NOTE: This does not authenticate the user on your server and is only useful for specially-handled cases.
     /// Example event payload `{"properties":{"123":456},"user_id":"12345","name":"test","time":"1970-01-01T00:00:00Z"}`
+    /// The attachment persists across visit renewals until `detachUser()` is called.
     public func attach(userId: String) {
+        attachedUserId = userId
         var currentVisit = currentVisitSubject.value
         currentVisit?.userId = userId
         currentVisitSubject.send(currentVisit)
+    }
+
+    /// Clears a user previously attached with `attach(userId:)`, e.g. on sign-out.
+    public func detachUser() {
+        attachedUserId = nil
+        var currentVisit = currentVisitSubject.value
+        currentVisit?.userId = nil
+        currentVisitSubject.send(currentVisit)
+    }
+
+    /// Renews the visit whenever the application becomes active — the platform's analogue of a web page load.
+    private func observeApplicationBecomingActive() {
+        guard let notificationName = Current.didBecomeActiveNotification else { return }
+
+        Current.notificationCenter
+            .publisher(for: notificationName)
+            // `.max(1)` so that a burst of activations can't pile up overlapping visit requests
+            .flatMap(maxPublishers: .max(1)) { [weak self] _ -> AnyPublisher<Visit, Never> in
+                guard let self = self else {
+                    return Empty().eraseToAnyPublisher()
+                }
+                // A no-op when the visit is still current
+                return self.ensureCurrentVisit()
+                    .catch { _ in Empty<Visit, Never>() }
+                    .eraseToAnyPublisher()
+            }
+            .sink { _ in }
+            .store(in: &cancellables)
+    }
+
+    private func visitForTracking() -> AnyPublisher<Visit, Error> {
+        guard configuration.automaticVisitRenewal else {
+            return currentVisit.map {
+                Just($0).setFailureType(to: Error.self).eraseToAnyPublisher()
+            } ?? Fail(error: AhoyError.noVisit).eraseToAnyPublisher()
+        }
+
+        return ensureCurrentVisit()
+    }
+
+    private func send(events: [Event], visit: Visit) -> AnyPublisher<Void, Error> {
+        let requestInput: EventRequestInput = .init(
+            visitorToken: visit.visitorToken,
+            visitToken: visit.visitToken,
+            events: events.map { .init(userId: visit.userId, wrapped: $0) }
+        )
+
+        return dataTaskPublisher(
+            path: configuration.eventsPath,
+            body: requestInput,
+            visit: visit
+        )
+            .validateResponse()
+            .map { _, _ in }
+            .eraseToAnyPublisher()
     }
 
     private func dataTaskPublisher<Body: Encodable>(path: String, body: Body, visit: Visit) -> Configuration.URLRequestPublisher {
