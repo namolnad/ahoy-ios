@@ -1,16 +1,18 @@
 import Foundation
 
-struct Environment {
-    var date: () -> Date = Date.init
-    var uuid: () -> UUID = UUID.init
-    var visitorToken: () -> UUID = visitorTokenProvider
-    var defaults: UserDefaults = .standard
+struct Environment: Sendable {
+    var date: @Sendable () -> Date = Date.init
+    var uuid: @Sendable () -> UUID = UUID.init
+    var visitorToken: @Sendable () -> UUID = visitorTokenProvider
+    /// `UserDefaults` is documented as thread-safe, but carries no `Sendable` conformance
+    nonisolated(unsafe) var defaults: UserDefaults = .standard
     var didBecomeActiveNotification: Notification.Name? = ApplicationLifecycle.didBecomeActiveNotification
     var notificationCenter: NotificationCenter = .default
 }
 
 #if DEBUG
-var Current: Environment = .init()
+/// Substituted by the test suite before any tracking begins; never mutated once concurrent work is under way.
+nonisolated(unsafe) var Current: Environment = .init()
 #else
 let Current: Environment = .init()
 #endif
@@ -18,19 +20,19 @@ let Current: Environment = .init()
 #if canImport(WatchKit)
 import WatchKit
 
-let visitorTokenProvider: () -> UUID = {
+let visitorTokenProvider: @Sendable () -> UUID = {
     WKInterfaceDevice.current().identifierForVendor ?? Current.uuid()
 }
 #elseif canImport(UIKit)
 import UIKit
 
-let visitorTokenProvider: () -> UUID = {
+let visitorTokenProvider: @Sendable () -> UUID = {
     UIDevice.current.identifierForVendor ?? Current.uuid()
 }
 #elseif canImport(AppKit)
 import AppKit
 
-let visitorTokenProvider: () -> UUID = {
+let visitorTokenProvider: @Sendable () -> UUID = {
     let matchingDict = IOServiceMatching("IOPlatformExpertDevice")
     let platformExpert = IOServiceGetMatchingService(kIOMasterPortDefault, matchingDict)
 

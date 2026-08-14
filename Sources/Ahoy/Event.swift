@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Event: Encodable {
+public struct Event: Encodable, Sendable {
     enum CodingKeys: CodingKey {
         case id
         case name
@@ -10,13 +10,13 @@ public struct Event: Encodable {
 
     let id: String?
     let name: String
-    let properties: [String: Encodable]
+    let properties: [String: any Encodable & Sendable]
     let time: Date
 
     public init(
         id: String? = nil,
         name: String,
-        properties: [String : Encodable],
+        properties: [String: any Encodable & Sendable],
         time: Date = .init()
     ) {
         self.id = id

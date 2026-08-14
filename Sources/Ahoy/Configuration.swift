@@ -2,12 +2,12 @@ import Combine
 import Foundation
 
 @dynamicMemberLookup
-public struct Configuration {
+public struct Configuration: Sendable {
     public typealias URLRequestPublisher = AnyPublisher<URLSession.DataTaskPublisher.Output, URLSession.DataTaskPublisher.Failure>
-    public typealias URLRequestHandler = (URLRequest) -> URLRequestPublisher
-    public typealias VisitParamsProvider = () -> [String: Encodable]?
+    public typealias URLRequestHandler = @Sendable (URLRequest) -> URLRequestPublisher
+    public typealias VisitParamsProvider = @Sendable () -> [String: any Encodable & Sendable]?
 
-    public struct ApplicationEnvironment {
+    public struct ApplicationEnvironment: Sendable {
         let platform: String
         let appVersion: String
         let osVersion: String
@@ -61,7 +61,7 @@ public struct Configuration {
         self.visitParams = visitParams
     }
 
-    subscript<T>(dynamicMember keyPath: KeyPath<ApplicationEnvironment, T>) -> T {
+    public subscript<T>(dynamicMember keyPath: KeyPath<ApplicationEnvironment, T>) -> T {
         environment[keyPath: keyPath]
     }
 }

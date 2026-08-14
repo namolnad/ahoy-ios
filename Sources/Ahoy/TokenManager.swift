@@ -1,6 +1,6 @@
 import Foundation
 
-public protocol AhoyTokenManager {
+public protocol AhoyTokenManager: Sendable {
     var visitorToken: String { get }
     var visitToken: String { get }
     /// Whether the manager currently holds an unexpired visit token. When `false`, reading `visitToken`
@@ -13,7 +13,8 @@ public extension AhoyTokenManager {
     var hasValidVisitToken: Bool { true }
 }
 
-final class TokenManager: AhoyTokenManager {
+/// Unchecked because the property wrappers below hold their own lock; see `ExpiringPersisted`
+final class TokenManager: AhoyTokenManager, @unchecked Sendable {
     private static let jsonEncoder: JSONEncoder = .init()
 
     private static let jsonDecoder: JSONDecoder = .init()

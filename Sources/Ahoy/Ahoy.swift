@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-public final class Ahoy {
+public final class Ahoy: @unchecked Sendable {
     /// The currently registered visit. Nil until a visit has been confirmed with your server
     public var currentVisit: Visit? {
         currentVisitSubject.value
@@ -25,7 +25,10 @@ public final class Ahoy {
     }
 
     /// Hooks for your application to modify the Ahoy requests prior to performing the request
-    public var requestInterceptors: [RequestInterceptor]
+    public var requestInterceptors: [RequestInterceptor] {
+        get { withLock { _requestInterceptors } }
+        set { withLock { _requestInterceptors = newValue } }
+    }
 
     private let currentVisitSubject: CurrentValueSubject<Visit?, Error> = .init(nil)
 
@@ -33,10 +36,20 @@ public final class Ahoy {
 
     private let storage: AhoyTokenManager
 
-    private var cancellables: Set<AnyCancellable> = []
+    /// Guards every mutable property below, so that an `Ahoy` client can be shared across isolation domains
+    private let lock: NSLock = .init()
+
+    private var _requestInterceptors: [RequestInterceptor]
+
+    private var _cancellables: Set<AnyCancellable> = []
+
+    private var _attachedUserId: String?
 
     /// Retained across visits so that a user attached via `attach(userId:)` survives visit renewal
-    private var attachedUserId: String?
+    private var attachedUserId: String? {
+        get { withLock { _attachedUserId } }
+        set { withLock { _attachedUserId = newValue } }
+    }
 
     public init(
         configuration: Configuration,
@@ -44,7 +57,7 @@ public final class Ahoy {
         storage: AhoyTokenManager? = nil
     ) {
         self.configuration = configuration
-        self.requestInterceptors = requestInterceptors
+        self._requestInterceptors = requestInterceptors
         if let storage = storage {
             self.storage = storage
         } else if let visitDuration = configuration.visitDuration {
@@ -61,7 +74,7 @@ public final class Ahoy {
     /// Tracks a visit. Can be called multiple times during a session—a new visit will be created as determined by your `TokenManager`.
     /// Calling this is only required when you have disabled `automaticVisitRenewal`, or when you wish to supply
     /// `additionalParams` for a specific visit.
-    public func trackVisit(additionalParams: [String: Encodable]? = nil) -> AnyPublisher<Visit, Error> {
+    public func trackVisit(additionalParams: [String: any Encodable & Sendable]? = nil) -> AnyPublisher<Visit, Error> {
         let visit: Visit = .init(
             visitorToken: storage.visitorToken,
             visitToken: storage.visitToken,
@@ -129,11 +142,12 @@ public final class Ahoy {
     }
 
     /// A fire-and-forget convenience function for tracking a single event
-    public func track(_ eventName: String, properties: [String: Encodable] = [:]) {
-        track(events: [.init(name: eventName, properties: properties)])
+    public func track(_ eventName: String, properties: [String: any Encodable & Sendable] = [:]) {
+        let cancellable = track(events: [.init(name: eventName, properties: properties)])
             .retry(3)
             .sink(receiveCompletion: { _ in }, receiveValue: {})
-            .store(in: &cancellables)
+
+        store(cancellable)
     }
 
     /// Attaches a User's ID to be encoded as a root key within subsequent event JSON payloads. NOTE: This does not authenticate the user on your server and is only useful for specially-handled cases.
@@ -158,7 +172,7 @@ public final class Ahoy {
     private func observeApplicationBecomingActive() {
         guard let notificationName = Current.didBecomeActiveNotification else { return }
 
-        Current.notificationCenter
+        let cancellable = Current.notificationCenter
             .publisher(for: notificationName)
             // `.max(1)` so that a burst of activations can't pile up overlapping visit requests
             .flatMap(maxPublishers: .max(1)) { [weak self] _ -> AnyPublisher<Visit, Never> in
@@ -171,7 +185,19 @@ public final class Ahoy {
                     .eraseToAnyPublisher()
             }
             .sink { _ in }
-            .store(in: &cancellables)
+
+        store(cancellable)
+    }
+
+    private func withLock<R>(_ body: () -> R) -> R {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return body()
+    }
+
+    private func store(_ cancellable: AnyCancellable) {
+        withLock { _ = _cancellables.insert(cancellable) }
     }
 
     private func visitForTracking() -> AnyPublisher<Visit, Error> {
@@ -297,7 +323,7 @@ public final class Ahoy {
         var platform: String
         var appVersion: String
         var osVersion: String
-        var additionalParams: [String: Encodable]?
+        var additionalParams: [String: any Encodable & Sendable]?
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
