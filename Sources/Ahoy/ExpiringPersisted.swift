@@ -1,9 +1,10 @@
 import Foundation
 
+/// Unchecked because every access to the stored value is serialized through `lock`
 @propertyWrapper
-struct ExpiringPersisted<T: Codable> {
+struct ExpiringPersisted<T: Codable>: @unchecked Sendable {
     let key: String
-    let newValue: () -> T
+    let newValue: @Sendable () -> T
     private(set) var expiryPeriod: TimeInterval? = nil
     let jsonEncoder: JSONEncoder
     let jsonDecoder: JSONDecoder

@@ -14,6 +14,8 @@ Simple visit-attribution and analytics library for Apple Platforms for integrati
 
 The Ahoy library can be easily installed using Swift Package Manager. See the [Apple docs](https://developer.apple.com/documentation/xcode/adding_package_dependencies_to_your_app) for instructions on adding a package to your project.
 
+Requires Swift 6 (Xcode 16 or later). The package builds in the Swift 6 language mode, and the `Ahoy` client is `Sendable` — you can share one instance across actors and tasks, and track from any isolation domain.
+
 ## Usage
 
 To get started you need to initialize an instance of an Ahoy client. The initializer takes a configuration object, which requires you to provide a `baseUrl` as well as an `ApplicationEnvironment` object.

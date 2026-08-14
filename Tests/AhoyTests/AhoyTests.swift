@@ -355,9 +355,9 @@ final class AhoyTests: XCTestCase {
 
     /// `visitorToken` carries no expiry period — it must survive repeated reads rather than being re-minted each time
     func testVisitorTokenIsStableAcrossReads() {
-        var mintCount = 0
+        let mints: Locked<Int> = .init(0)
         Current.visitorToken = {
-            mintCount += 1
+            mints.mutate { $0 += 1 }
             return .firstToken
         }
 
@@ -369,35 +369,28 @@ final class AhoyTests: XCTestCase {
 
         XCTAssertEqual(first, second)
         XCTAssertEqual(second, third)
-        XCTAssertEqual(mintCount, 1)
+        XCTAssertEqual(mints.current, 1)
     }
 
     /// Concurrent readers arriving at an expired token must agree on its replacement rather than each minting
     /// their own, which would scatter a single session's events across several visits
     func testConcurrentReadsMintASingleVisitToken() {
-        let mintLock: NSLock = .init()
-        var mintCount = 0
+        let mints: Locked<Int> = .init(0)
         Current.uuid = {
-            mintLock.lock()
-            defer { mintLock.unlock() }
-            mintCount += 1
+            mints.mutate { $0 += 1 }
             return .init()
         }
 
         let manager: TokenManager = .init(visitDuration: 3_600)
-
-        let tokensLock: NSLock = .init()
-        var tokens: Set<String> = []
+        let tokens: Locked<Set<String>> = .init([])
 
         DispatchQueue.concurrentPerform(iterations: 100) { _ in
             let token = manager.visitToken
-            tokensLock.lock()
-            tokens.insert(token)
-            tokensLock.unlock()
+            tokens.mutate { $0.insert(token) }
         }
 
-        XCTAssertEqual(tokens.count, 1)
-        XCTAssertEqual(mintCount, 1)
+        XCTAssertEqual(tokens.current.count, 1)
+        XCTAssertEqual(mints.current, 1)
     }
 
     func testVisitTokenValidityReflectsExpiry() {
@@ -412,6 +405,72 @@ final class AhoyTests: XCTestCase {
         Current.date = { Date(timeIntervalSince1970: 0).advanced(by: 3_601) }
 
         XCTAssertFalse(manager.hasValidVisitToken)
+    }
+
+    // MARK: - Fire-and-forget bookkeeping
+
+    /// The test handler completes synchronously, so each subscription settles before it can even be retained
+    func testFireAndForgetTrackingReleasesSynchronousRequests() {
+        Current.uuid = { .firstToken }
+
+        for index in 0..<50 {
+            ahoy.track("event_\(index)")
+        }
+
+        XCTAssertEqual(ahoy.inFlightEventCount, 0)
+        XCTAssertEqual(ahoy.settledEventCount, 0, "Bookkeeping must drain rather than trade one leak for another")
+        XCTAssertTrue(TestRequestHandler.instance.body.contains("event_49"))
+    }
+
+    func testFireAndForgetTrackingReleasesDeferredRequests() {
+        Current.uuid = { .firstToken }
+        DeferredEventsRequestHandler.instance.reset()
+
+        let ahoy: Ahoy = .init(configuration: .deferredEventsTestDefault)
+
+        ahoy.track("deferred_one")
+        ahoy.track("deferred_two")
+
+        XCTAssertEqual(ahoy.inFlightEventCount, 2, "Both requests are still in flight")
+
+        DeferredEventsRequestHandler.instance.completePending()
+
+        XCTAssertEqual(ahoy.inFlightEventCount, 0)
+        XCTAssertEqual(ahoy.settledEventCount, 0)
+    }
+
+    // MARK: - Concurrency
+
+    /// Needs only to compile: the public surface has to be shareable for the client to be usable at all
+    func testPublicTypesAreSendable() {
+        func requireSendable<T: Sendable>(_: T.Type) {}
+
+        requireSendable(Ahoy.self)
+        requireSendable(Configuration.self)
+        requireSendable(Configuration.ApplicationEnvironment.self)
+        requireSendable(Event.self)
+        requireSendable(Visit.self)
+        requireSendable(RequestInterceptor.self)
+        requireSendable(AhoyError.self)
+    }
+
+    func testClientIsUsableAcrossIsolationDomains() async {
+        let ahoy: Ahoy = .init(configuration: .testDefault)
+
+        await Task.detached {
+            ahoy.attach(userId: "12345")
+            ahoy.track("from_detached_task", properties: ["source": "detached"])
+        }.value
+
+        await MainActor.run {
+            ahoy.requestInterceptors = [
+                .init { $0.addValue("intercepted", forHTTPHeaderField: "from-main-actor") }
+            ]
+        }
+
+        XCTAssertEqual(ahoy.currentVisit?.userId, "12345")
+        XCTAssertEqual(ahoy.requestInterceptors.count, 1)
+        XCTAssertTrue(TestRequestHandler.instance.body.contains("from_detached_task"))
     }
 
     // MARK: - Helpers
@@ -450,10 +509,84 @@ final class AhoyTests: XCTestCase {
         wait(for: [expectation], timeout: 0.1)
     }
 
-    static var allTests = [
-        ("testTrackVisit", testTrackVisit),
-        ("testTrackEvents", testTrackEvents)
-    ]
+}
+
+/// Completes visit requests immediately but holds event requests open, so a test can observe a
+/// fire-and-forget subscription while it is genuinely in flight
+final class DeferredEventsRequestHandler: @unchecked Sendable {
+    nonisolated(unsafe) static let instance: DeferredEventsRequestHandler = .init()
+
+    private typealias Output = Configuration.URLRequestPublisher.Output
+
+    private let lock: NSLock = .init()
+    private var pending: [(subject: PassthroughSubject<Output, URLError>, output: Output)] = []
+
+    var pendingCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return pending.count
+    }
+
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        pending = []
+    }
+
+    func publisher(for urlRequest: URLRequest) -> Configuration.URLRequestPublisher {
+        let response = HTTPURLResponse(url: urlRequest.url!, statusCode: 200, httpVersion: "1.0", headerFields: [:])!
+        let output: Output = (data: urlRequest.httpBody!, response: response)
+
+        guard urlRequest.url!.lastPathComponent == "my-events" else {
+            return Just(output).setFailureType(to: URLError.self).eraseToAnyPublisher()
+        }
+
+        let subject: PassthroughSubject<Output, URLError> = .init()
+
+        lock.lock()
+        pending.append((subject, output))
+        lock.unlock()
+
+        return subject.eraseToAnyPublisher()
+    }
+
+    func completePending() {
+        lock.lock()
+        let inFlight = pending
+        pending = []
+        lock.unlock()
+
+        inFlight.forEach { subject, output in
+            subject.send(output)
+            subject.send(completion: .finished)
+        }
+    }
+}
+
+/// A minimal thread-safe box, so test doubles can be mutated from the `@Sendable` closures on `Current`
+final class Locked<Value>: @unchecked Sendable {
+    private let lock: NSLock = .init()
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    var current: Value {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return value
+    }
+
+    func mutate(_ body: (inout Value) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        body(&value)
+    }
 }
 
 extension UUID {
@@ -464,7 +597,7 @@ extension UUID {
 extension Configuration {
     static let testDefault: Self = .init(
         environment: .testDefault,
-        urlRequestHandler: TestRequestHandler.instance.publisher(for:),
+        urlRequestHandler: { TestRequestHandler.instance.publisher(for: $0) },
         baseUrl: URL(string: "https://ahoy.com")!,
         ahoyPath: "test-ahoy",
         eventsPath: "my-events",
@@ -474,7 +607,7 @@ extension Configuration {
 
     static let manualTestDefault: Self = .init(
         environment: .testDefault,
-        urlRequestHandler: TestRequestHandler.instance.publisher(for:),
+        urlRequestHandler: { TestRequestHandler.instance.publisher(for: $0) },
         baseUrl: URL(string: "https://ahoy.com")!,
         ahoyPath: "test-ahoy",
         eventsPath: "my-events",
@@ -483,9 +616,19 @@ extension Configuration {
         automaticVisitRenewal: false
     )
 
+    static let deferredEventsTestDefault: Self = .init(
+        environment: .testDefault,
+        urlRequestHandler: { DeferredEventsRequestHandler.instance.publisher(for: $0) },
+        baseUrl: URL(string: "https://ahoy.com")!,
+        ahoyPath: "test-ahoy",
+        eventsPath: "my-events",
+        visitsPath: "my-visits",
+        visitDuration: .oneHour
+    )
+
     static let visitParamsTestDefault: Self = .init(
         environment: .testDefault,
-        urlRequestHandler: TestRequestHandler.instance.publisher(for:),
+        urlRequestHandler: { TestRequestHandler.instance.publisher(for: $0) },
         baseUrl: URL(string: "https://ahoy.com")!,
         ahoyPath: "test-ahoy",
         eventsPath: "my-events",
@@ -544,11 +687,11 @@ final class TestRequestHandler {
 }
 
 extension TestRequestHandler {
-    static let instance: TestRequestHandler = .init()
+    nonisolated(unsafe) static let instance: TestRequestHandler = .init()
 }
 
 final class TestDefaults: UserDefaults {
-    static let instance: TestDefaults = .init()
+    nonisolated(unsafe) static let instance: TestDefaults = .init()
 
     private var storage: [String: Any] = [:]
 

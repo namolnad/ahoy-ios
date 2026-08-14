@@ -6,8 +6,8 @@ extension Encodable {
     }
 }
 
-struct AnyEncodable: Encodable {
-    let wrapped: Encodable
+struct AnyEncodable: Encodable, Sendable {
+    let wrapped: any Encodable & Sendable
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
@@ -16,7 +16,7 @@ struct AnyEncodable: Encodable {
 }
 
 extension KeyedEncodingContainer {
-    mutating func encode<Key: Encodable>(_ dictionary: [Key: Encodable], forKey key: K) throws {
+    mutating func encode<Key: Encodable>(_ dictionary: [Key: any Encodable & Sendable], forKey key: K) throws {
         try encode(dictionary.mapValues(AnyEncodable.init(wrapped:)), forKey: key)
     }
 }
