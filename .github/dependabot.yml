@@ -1,0 +1,13 @@
+version: 2
+# Only the workflows' actions: the package has no Package.resolved, and
+# widening Package.swift's requirements is a release decision, not a
+# dependency update. .github/workflows/dependabot-auto-merge.yml merges patch
+# and minor bumps once CI is green.
+updates:
+- package-ecosystem: github-actions
+  directory: "/"
+  schedule:
+    interval: weekly
+  groups:
+    patch-and-minor:
+      update-types: [minor, patch]
